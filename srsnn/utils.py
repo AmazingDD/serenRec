@@ -49,8 +49,9 @@ class Interactions(object):
             raise NameError(f'Invalid dataset name: {self.dataset}')
         
         self.data.drop_duplicates([self.uid_name, self.iid_name], keep='last', ignore_index=True)
-        self.user_num = self.data[self.uid_name].nunique()
-        self.item_num = self.data[self.iid_name].nunique()
+        # plus 1 for none-user and none-item
+        self.user_num = self.data[self.uid_name].nunique() + 1 
+        self.item_num = self.data[self.iid_name].nunique() + 1
         
     def _build_seq(self):
         if self.time_name is not None:
