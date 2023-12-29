@@ -103,13 +103,18 @@ class Interactions(object):
         ]
 
     def _encode_id(self):
-        self.uid_token = pd.Categorical(self.data[self.uid_name]).categories.to_numpy()
-        self.iid_token = pd.Categorical(self.data[self.iid_name]).categories.to_numpy()
-        self.token_uid = {uid: token for token, uid in enumerate(self.uid_token)}
-        self.token_iid = {iid: token for token, iid in enumerate(self.iid_token)}
+        token_uid = pd.Categorical(self.data[self.uid_name]).categories.to_numpy()
+        token_iid = pd.Categorical(self.data[self.iid_name]).categories.to_numpy()
+        # start from 1, 0 for none-item
+        self.token_uid = {token + 1: uid for token, uid in enumerate(token_uid)}
+        self.token_iid = {token + 1: iid for token, iid in enumerate(token_iid)}
 
-        self.data[self.uid_name] = pd.Categorical(self.data[self.uid_name]).codes
-        self.data[self.iid_name] = pd.Categorical(self.data[self.iid_name]).codes
+        self.uid_token = {v: k for k, v in self.token_uid.items()}
+        self.iid_token = {v: k for k, v in self.token_iid.items()}
+
+        # tokenize columns
+        self.data[self.uid_name] = self.data[self.uid_name].map(self.uid_token)
+        self.data[self.iid_name] = self.data[self.iid_name].map(self.iid_token)
 
     def _build_dataset(self):
         rnd_idx = torch.randperm(len(self.target_list))
