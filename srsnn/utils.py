@@ -6,17 +6,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 
-config = {
-    'dataset': 'ml-1m',
-    'max_seq_len': 10,
-    'uid_name': 'user',
-    'iid_name': 'item',
-    'inter_name': 'rating',
-    'time_name': 'timestamp',
-    'test_ratio': 0.2,
-    'prepro': None,
-}
-
 class Interactions(object):
     def __init__(self, config, encoding=True) -> None:
         self.data = None
