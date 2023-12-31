@@ -1,3 +1,5 @@
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,15 +22,15 @@ class BPRMF(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
 
         # parameters initialization
-        self.apply(self._init_weights)
+    #     self.apply(self._init_weights)
 
-    def _init_weights(self, module):
-        if isinstance(module, nn.Embedding):
-            nn.init.normal_(module.weight.data, 0, 0.002)
-        elif isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight.data, 0, 0.05)
-            if module.bias is not None:
-                module.bias.data.fill_(0.0)
+    # def _init_weights(self, module):
+    #     if isinstance(module, nn.Embedding):
+    #         nn.init.normal_(module.weight.data, 0, 0.002)
+    #     elif isinstance(module, nn.Linear):
+    #         nn.init.normal_(module.weight.data, 0, 0.05)
+    #         if module.bias is not None:
+    #             module.bias.data.fill_(0.0)
                 
     def forward(self, seq, lengths):
         item_seq_emb = self.item_embedding(seq)
@@ -51,6 +53,7 @@ class BPRMF(nn.Module):
             total_loss = 0.
             sample_num = 0
 
+            start_time = time.time()
             for seq, target, lens in train_loader:
                 self.optimizer.zero_grad()
 
@@ -72,14 +75,30 @@ class BPRMF(nn.Module):
                 total_loss += loss.item()
                 sample_num += target.numel()
             
-            self.scheduler.step()
+            # self.scheduler.step()
 
             if valid_loader is not None:
-                pass
+                self.eval()
+                with torch.no_grad():
+                    preds, last_item = self.predict(valid_loader, [10])
+                    pred = preds[10]
+                    N, topk = pred.size()
+                    expand_target = last_item.unsqueeze(1).expand(-1, topk)
+                    hr = (pred == expand_target)
+                    ranks = (hr.nonzero(as_tuple=False)[:,-1] + 1).float()
+                    mrr = torch.reciprocal(ranks)
+                    ndcg = 1 / torch.log2(ranks + 1)
 
-            print(f'training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss / sample_num:.4f}')
+                    res_hr = hr.sum(axis=1).float().mean().item()
+                    res_mrr = torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item()
+                    res_ndcg = torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
+
+            train_time = time.time() - start_time
+            print(f'training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f} \tTrain Elapse: {train_time:.2f}s')
+            if valid_loader is not None:
+                print(f'Test Metrics: HR@10: {res_hr:.4f}, MRR@10: {res_mrr:.4f}, NDCG@10: {res_ndcg:.4f}')
             
-    def predict(self, test_loader, k:list=[15]):
+    def predict(self, test_loader, k:list=[10]):
         self.eval()
 
         preds = {topk : torch.tensor([]) for topk in k}
@@ -90,10 +109,10 @@ class BPRMF(nn.Module):
             lens = lens.to(self.device)
 
             scores = self.forward(seq, lens) # B, n_item, here n_item=true item num + 1
-            rank_list = (torch.argsort(scores[:, 1:], descending=True) + 1) # [:, 1:] to delect item 0, +1 to represent the actual code of items
+            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1 # [:, 1:] to delect item 0, +1 to represent the actual code of items
 
             for topk in k:
-                preds[topk] = torch.cat((preds[topk], rank_list[:,:k].cpu()), 0)
+                preds[topk] = torch.cat((preds[topk], rank_list[:, :topk].cpu()), 0)
         
             last_item = torch.cat((last_item, target), 0)
 
