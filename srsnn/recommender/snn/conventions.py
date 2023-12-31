@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from spikingjelly.activation_based import neuron, surrogate, functional
+
 
 class BPRMF(nn.Module):
     def __init__(self, item_num, params):
@@ -11,32 +13,41 @@ class BPRMF(nn.Module):
         self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
         self.lr = params['learning_rate'] # 1e-4
         self.wd = params['weight_decay'] # 5e-4
+        assert params['T'] == params['max_seq_len'], 'time step for SNN should be the same as the sequence length, check arg T and max_seq_len!'
+        self.T = params['T']
 
 
-        self.n_items = item_num + 1 # 多一个0代表空
-        self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) # default embedding for item 0 is all zeros
+        self.n_items = item_num + 1 
+        self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) 
+
+        self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
+        self.bn = nn.BatchNorm1d(self.n_factors)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
-
-        # parameters initialization
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Embedding):
-            nn.init.normal_(module.weight.data, 0, 0.002)
-        elif isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight.data, 0, 0.05)
-            if module.bias is not None:
-                module.bias.data.fill_(0.0)
                 
     def forward(self, seq, lengths):
-        item_seq_emb = self.item_embedding(seq)
+        temp_seq = torch.zeros_like(seq)
+        temp_seq = temp_seq.to(self.device)
+        
+        uF = 0.
+        for t in range(1, self.T + 1):
+            temp_seq[:, :t] = seq[:, :t] 
+            temp_lengths = torch.tensor([t]).expand_as(lengths)
+            temp_lengths = temp_lengths.to(self.device)
+            temp_lengths = torch.where(temp_lengths >= lengths, lengths, temp_lengths)
 
-        uF = torch.div(
-            torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-            torch.FloatTensor(lengths).unsqueeze(dim=1) # B -> B,1
-        ) # (B, dim)
+            item_seq_emb = self.item_embedding(temp_seq)
+            temp_uF = torch.div(
+                torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
+                torch.FloatTensor(temp_lengths).unsqueeze(dim=1) # B -> B,1
+            ) # (B, dim)
+
+            temp_uF = self.bn(temp_uF)
+            uF += self.lif(temp_uF)
+
+        uF /= self.T
+
         item_embs = self.item_embedding(torch.arange(self.n_items)) # predict for all items, (n_item, dim)
         scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
 
@@ -71,12 +82,14 @@ class BPRMF(nn.Module):
                 
                 total_loss += loss.item()
                 sample_num += target.numel()
-            
+
+                functional.reset_net(self)
+
             self.scheduler.step()
 
             if valid_loader is not None:
                 pass
-
+            
             print(f'training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss / sample_num:.4f}')
             
     def predict(self, test_loader, k:list=[15]):
