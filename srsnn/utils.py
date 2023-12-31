@@ -139,3 +139,21 @@ class SequentialDataset(Dataset):
 
     def __getitem__(self, index):
         return self.seqs[index], self.next_item[index], self.seq_lens[index]
+    
+
+def accuracy_calculator(pred, last_item):
+    N, topk = pred.size()
+    expand_target = last_item.unsqueeze(1).expand(-1, topk)
+
+    hr = (pred == expand_target)
+    ranks = (hr.nonzero(as_tuple=False)[:,-1] + 1).float() # 排序要从1开始，但是nonzero返回的索引从0开始
+    mrr = torch.reciprocal(ranks) # 1/ranks
+    ndcg = 1 / torch.log2(ranks + 1)
+
+    metrics = {
+        'hr': hr.sum(axis=1).float().mean().item(),
+        'mrr': torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item(), # no last_item in pred means the mrr/ndcg is zero for them
+        'ndcg': torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
+    }
+
+    return metrics, topk

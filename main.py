@@ -26,7 +26,7 @@ parser.add_argument('-epochs', default=150, type=int, help='The number of traini
 parser.add_argument('-batch_size', default=128, type=int, help='batch size.')
 parser.add_argument('-wd', '--weight_decay', default=5e-4, type=float, help='weight decay')
 parser.add_argument('-lr', '--learning_rate', default=1e-4, type=float, help='learning rate')
-parser.add_argument('-T', default=5, type=int, help='simulating time-steps')
+parser.add_argument('-T', default=10, type=int, help='simulating time-steps') # this should be the same as max_seq_len
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=100, type=int, help='embedding dimension for items')
 
@@ -49,8 +49,7 @@ if config['reproducibility']:
 dataset_root_dir = './dataset/'
 dataset_dir = os.path.join(dataset_root_dir, config['dataset'], 'dataset.pt')
 if os.path.exists(dataset_dir):
-    dataset = torch.load(dataset_dir, map_location='cpu')
-    # TODO
+    train_dataset, test_dataset, item_num = torch.load(dataset_dir, map_location='cpu')
 else:
     inters = Interactions(config)
     inters.build()
@@ -58,11 +57,22 @@ else:
     train_dataset = SequentialDataset(inters.train_data)
     test_dataset = SequentialDataset(inters.test_data)
     item_num = inters.item_num
+    if config['save_dataset']:
+        torch.save([train_dataset, test_dataset, item_num], dataset_dir)
 
 train_dataloader = get_dataloader(train_dataset, batch_size=config['batch_size'], shuffle=config['shuffle'], num_workers=config['worker'])
 test_dataloader = get_dataloader(test_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=config['worker'])
 
+
 model = BPRMF(config)
+print('Start training...')
+model.fit(train_dataloader)
+print('Finish training')
 
+preds, last_item = model.predict(test_dataloader, k=config['topk']) # top10 default
 
-
+print('The prediction results is:')
+for pred in preds:
+    metrics, k = accuracy_calculator(pred, last_item, config['metrics'])
+    for kpi in config['metrics']:
+        print(f'{kpi}@{k}: {metrics[kpi]:.4f}')

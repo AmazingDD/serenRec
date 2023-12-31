@@ -47,9 +47,9 @@ class BPRMF(nn.Module):
 
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
-        print('Start training...')
         for epoch in range(1, self.epochs + 1):
             self.train()
+
             total_loss = 0.
             sample_num = 0
 
@@ -76,7 +76,6 @@ class BPRMF(nn.Module):
                 sample_num += target.numel()
             
             print(f'training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss / sample_num:.4f}')
-        print('Finish training')
             
     def predict(self, test_loader, k:list=[15]):
         self.eval()
