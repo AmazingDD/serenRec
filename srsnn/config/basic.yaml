@@ -7,9 +7,13 @@ state: INFO                     # (str) Logging level.
 reproducibility: True           # (bool) Whether or not to make results reproducible.
 data_path: 'dataset/'           # (str) The path of input dataset.
 checkpoint_dir: 'saved'         # (str) The path to save checkpoint file.
-save_dataset: False             # (bool) Whether or not to save filtered dataset.
+save_dataset: True             # (bool) Whether or not to save filtered dataset.
 dataset_save_path: ~            # (str) The path of saved dataset.
 shuffle: True                   # (bool) Whether or not to shuffle the training data before each epoch.
+uid_name: 'user'
+iid_name: 'item'
+inter_name: 'rating'
+time_name: 'timestamp'
 
 # Training Settings
 epochs: 150                     # (int) The number of training epochs.

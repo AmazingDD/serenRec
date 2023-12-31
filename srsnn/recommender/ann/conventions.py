@@ -35,7 +35,7 @@ class BPRMF(nn.Module):
 
         uF = torch.div(
             torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-            torch.FloatTensor(lengths).unsqueeze(dim=1) # B -> B,1
+            lengths.float().unsqueeze(dim=1) # B -> B,1
         ) # (B, dim)
         item_embs = self.item_embedding(torch.arange(self.n_items)) # predict for all items, (n_item, dim)
         scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)

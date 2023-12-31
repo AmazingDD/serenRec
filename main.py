@@ -5,7 +5,8 @@ import argparse
 import torch
 
 from srsnn.utils import *
-from srsnn.recommender.ann.conventions import BPRMF
+from srsnn.recommender.ann.conventions import BPRMF as ANNBPRMF
+from srsnn.recommender.snn.conventions import BPRMF as SNNBPRMF
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -15,7 +16,7 @@ parser = argparse.ArgumentParser(description='SNN for sequential recommendation 
 parser.add_argument('-data_dir', type=str, default='.', help='root dir of dataset')
 parser.add_argument('-gpu_id', type=str, default='0', help='gpu card id')
 parser.add_argument('-use_cuda', action='store_true', help='use gpu to run code')
-parser.add_argument('-worker', default=4, type=int, help='number of workers for dataloader')
+parser.add_argument('-worker', default=0, type=int, help='number of workers for dataloader')
 parser.add_argument('-shuffle', action='store_false', help='Whether or not to shuffle the training data before each epoch.')
 # Training Settings
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')
@@ -47,9 +48,10 @@ if config['reproducibility']:
     torch.backends.cudnn.benchmark = False
 
 dataset_root_dir = './dataset/'
-dataset_dir = os.path.join(dataset_root_dir, config['dataset'], 'dataset.pt')
-if os.path.exists(dataset_dir):
-    train_dataset, test_dataset, item_num = torch.load(dataset_dir, map_location='cpu')
+dataset_dir = os.path.join(dataset_root_dir, config['dataset']) 
+if os.path.exists(os.path.join(dataset_dir, 'dataset.pt')):
+    train_dataset, test_dataset, item_num = torch.load(
+        os.path.join(dataset_dir, 'dataset.pt'), map_location='cpu')
 else:
     inters = Interactions(config)
     inters.build()
@@ -58,13 +60,15 @@ else:
     test_dataset = SequentialDataset(inters.test_data)
     item_num = inters.item_num
     if config['save_dataset']:
-        torch.save([train_dataset, test_dataset, item_num], dataset_dir)
+        if not os.path.exists(dataset_dir):
+            os.makedirs(dataset_dir)
+        torch.save([train_dataset, test_dataset, item_num], os.path.join(dataset_dir, 'dataset.pt'))
 
 train_dataloader = get_dataloader(train_dataset, batch_size=config['batch_size'], shuffle=config['shuffle'], num_workers=config['worker'])
 test_dataloader = get_dataloader(test_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=config['worker'])
 
 
-model = BPRMF(config)
+model = ANNBPRMF(item_num, config)
 print('Start training...')
 model.fit(train_dataloader)
 print('Finish training')

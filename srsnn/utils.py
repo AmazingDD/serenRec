@@ -121,6 +121,7 @@ class Interactions(object):
 
         self._build_seq()
         self._build_dataset()
+        print('Finish load data')
 
 
 def get_dataloader(ds, batch_size, shuffle, num_workers=4):  
@@ -132,7 +133,7 @@ class SequentialDataset(Dataset):
         super(SequentialDataset, self).__init__()
         self.seqs = data[0]
         self.next_item = data[1]
-        self.seq_lens = data[3]
+        self.seq_lens = data[2]
 
     def __len__(self):
         return len(self.next_item)
@@ -151,9 +152,9 @@ def accuracy_calculator(pred, last_item):
     ndcg = 1 / torch.log2(ranks + 1)
 
     metrics = {
-        'hr': hr.sum(axis=1).float().mean().item(),
-        'mrr': torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item(), # no last_item in pred means the mrr/ndcg is zero for them
-        'ndcg': torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
+        'HR': hr.sum(axis=1).float().mean().item(),
+        'MRR': torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item(), # no last_item in pred means the mrr/ndcg is zero for them
+        'NDCG': torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
     }
 
     return metrics, topk
