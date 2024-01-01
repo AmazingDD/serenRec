@@ -15,9 +15,9 @@ class BPRMF(nn.Module):
         self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
         self.lr = params['learning_rate'] # 1e-4
         self.wd = params['weight_decay'] # 5e-4
-        assert params['T'] == params['max_seq_len'], 'time step for SNN should be the same as the sequence length, check arg T and max_seq_len!'
+        assert params['max_seq_len'] % params['T'] == 0, 'max_seq_len should be multiples of T!'
         self.T = params['T']
-
+        self.step_size = int(params['max_seq_len'] / self.T)
 
         self.n_items = item_num + 1 
         self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) 
@@ -34,6 +34,8 @@ class BPRMF(nn.Module):
         
         uF = 0.
         for t in range(1, self.T + 1):
+            temp_seq = temp_seq.clone()
+            t *= self.step_size
             temp_seq[:, :t] = seq[:, :t] 
             temp_lengths = torch.tensor([t]).expand_as(lengths)
             temp_lengths = temp_lengths.to(self.device)
@@ -42,7 +44,7 @@ class BPRMF(nn.Module):
             item_seq_emb = self.item_embedding(temp_seq)
             temp_uF = torch.div(
                 torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-                torch.FloatTensor(temp_lengths).unsqueeze(dim=1) # B -> B,1
+                temp_lengths.float().unsqueeze(dim=1) # B -> B,1
             ) # (B, dim)
 
             temp_uF = self.bn(temp_uF)
@@ -73,11 +75,9 @@ class BPRMF(nn.Module):
                 lens = lens.to(self.device) # (B)
 
                 logit = self.forward(seq, lens)
+                logit_sampled = logit[:, target.view(-1)]
 
-                logit_sampled = logit[:, target.view(-1)] # 选出这一组batch中各个batch的next item groundtruth，对于这个方阵，对角线的位置是对应的真正GT
-
-                # differences between the item scores
-                diff = logit_sampled.diag().view(-1, 1).expand_as(logit_sampled) - logit_sampled # positive - negative
+                diff = logit_sampled.diag().view(-1, 1).expand_as(logit_sampled) - logit_sampled
                 loss = -torch.mean(F.logsigmoid(diff)) # BPR loss
 
                 loss.backward()
@@ -128,5 +128,7 @@ class BPRMF(nn.Module):
                 preds[topk] = torch.cat((preds[topk], rank_list[:,:topk].cpu()), 0)
         
             last_item = torch.cat((last_item, target), 0)
+            
+            functional.reset_net(self)
 
         return preds, last_item

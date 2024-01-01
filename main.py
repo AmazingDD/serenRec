@@ -20,6 +20,8 @@ parser.add_argument('-worker', default=0, type=int, help='number of workers for 
 parser.add_argument('-shuffle', action='store_false', help='Whether or not to shuffle the training data before each epoch.')
 # Training Settings
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')
+parser.add_argument('-act', default='snn', help='algo type name')
+parser.add_argument('-model', default='bprmf', help='algo name')
 parser.add_argument('-prepro', default='5core', help='preprocessing method for dataset') # raw TODO
 parser.add_argument('-len', '--max_seq_len', default=20, type=int, help='max sequence length')
 parser.add_argument('-test_ratio', default=0.2, type=float, help='test ratio for fold-out split')
@@ -28,6 +30,7 @@ parser.add_argument('-batch_size', default=128, type=int, help='batch size.')
 parser.add_argument('-wd', '--weight_decay', default=1e-4, type=float, help='weight decay')
 parser.add_argument('-lr', '--learning_rate', default=0.001, type=float, help='learning rate')
 parser.add_argument('-T', default=5, type=int, help='simulating time-steps') # this should be the same as max_seq_len
+parser.add_argument('-tau', default=4./3, type=float, help='time constant of LIF neuron')
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding dimension for items')
 
@@ -68,8 +71,13 @@ train_dataloader = get_dataloader(train_dataset, batch_size=config['batch_size']
 test_dataloader = get_dataloader(test_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=config['worker'])
 
 print(config)
+if config['act'] == 'ann':
+    model = ANNBPRMF(item_num, config)
+elif config['act'] == 'snn':
+    model = SNNBPRMF(item_num, config)
+else:
+    raise ValueError('Invalid activation name...')
 
-model = ANNBPRMF(item_num, config)
 print('Start training...')
 model.fit(train_dataloader, test_dataloader)
 print('Finish training')

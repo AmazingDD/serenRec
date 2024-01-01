@@ -20,17 +20,6 @@ class BPRMF(nn.Module):
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
-
-        # parameters initialization
-    #     self.apply(self._init_weights)
-
-    # def _init_weights(self, module):
-    #     if isinstance(module, nn.Embedding):
-    #         nn.init.normal_(module.weight.data, 0, 0.002)
-    #     elif isinstance(module, nn.Linear):
-    #         nn.init.normal_(module.weight.data, 0, 0.05)
-    #         if module.bias is not None:
-    #             module.bias.data.fill_(0.0)
                 
     def forward(self, seq, lengths):
         item_seq_emb = self.item_embedding(seq)
