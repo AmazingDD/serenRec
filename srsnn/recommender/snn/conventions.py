@@ -29,24 +29,33 @@ class BPRMF(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
                 
     def forward(self, seq, lengths):
-        temp_seq = torch.zeros_like(seq)
-        temp_seq = temp_seq.to(self.device)
-        
         uF = 0.
-        for t in range(1, self.T + 1):
-            temp_seq = temp_seq.clone()
-            t *= self.step_size
-            temp_seq[:, :t] = seq[:, :t] 
-            temp_lengths = torch.tensor([t]).expand_as(lengths)
-            temp_lengths = temp_lengths.to(self.device)
-            temp_lengths = torch.where(temp_lengths >= lengths, lengths, temp_lengths)
 
-            item_seq_emb = self.item_embedding(temp_seq)
+        # temp_seq = torch.zeros_like(seq)
+        # temp_seq = temp_seq.to(self.device)
+        # for t in range(1, self.T + 1):
+        #     temp_seq = temp_seq.clone()
+        #     t *= self.step_size
+        #     temp_seq[:, :t] = seq[:, :t] 
+        #     temp_lengths = torch.tensor([t]).expand_as(lengths)
+        #     temp_lengths = temp_lengths.to(self.device)
+        #     temp_lengths = torch.where(temp_lengths >= lengths, lengths, temp_lengths)
+
+        #     item_seq_emb = self.item_embedding(temp_seq)
+        #     temp_uF = torch.div(
+        #         torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
+        #         temp_lengths.float().unsqueeze(dim=1) # B -> B,1
+        #     ) # (B, dim)
+
+        #     temp_uF = self.bn(temp_uF)
+        #     uF += self.lif(temp_uF)
+
+        item_seq_emb = self.item_embedding(seq)
+        for _ in range(self.T):
             temp_uF = torch.div(
-                torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-                temp_lengths.float().unsqueeze(dim=1) # B -> B,1
-            ) # (B, dim)
-
+                torch.sum(item_seq_emb, dim=1),
+                lengths.float().unsqueeze(dim=1)
+            )
             temp_uF = self.bn(temp_uF)
             uF += self.lif(temp_uF)
 
@@ -128,7 +137,7 @@ class BPRMF(nn.Module):
                 preds[topk] = torch.cat((preds[topk], rank_list[:,:topk].cpu()), 0)
         
             last_item = torch.cat((last_item, target), 0)
-            
+
             functional.reset_net(self)
 
         return preds, last_item
