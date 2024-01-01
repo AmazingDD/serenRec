@@ -21,10 +21,10 @@ parser.add_argument('-worker', default=0, type=int, help='number of workers for 
 parser.add_argument('-shuffle', action='store_false', help='Whether or not to shuffle the training data before each epoch.')
 # Training Settings
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')
-parser.add_argument('-act', default='snn', help='algo type name')
+parser.add_argument('-act', default='ann', help='algo type name')
 parser.add_argument('-model', default='bprmf', help='algo name')
 parser.add_argument('-prepro', default='5core', help='preprocessing method for dataset') # raw TODO
-parser.add_argument('-len', '--max_seq_len', default=40, type=int, help='max sequence length')
+parser.add_argument('-len', '--max_seq_len', default=20, type=int, help='max sequence length')
 parser.add_argument('-test_ratio', default=0.2, type=float, help='test ratio for fold-out split')
 parser.add_argument('-epochs', default=20, type=int, help='The number of training epochs.')
 parser.add_argument('-batch_size', default=128, type=int, help='batch size.')

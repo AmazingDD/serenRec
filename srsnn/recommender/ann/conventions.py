@@ -17,6 +17,7 @@ class BPRMF(nn.Module):
 
         self.n_items = item_num + 1 # 多一个0代表空
         self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) # default embedding for item 0 is all zeros
+        self.bn = nn.BatchNorm1d(self.n_factors)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
@@ -29,6 +30,7 @@ class BPRMF(nn.Module):
             lengths.float().unsqueeze(dim=1) # B -> B,1
         ) # (B, dim)
         item_embs = self.item_embedding(torch.arange(self.n_items)) # predict for all items, (n_item, dim)
+        uF = self.bn(uF)
         scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
 
         return scores
