@@ -82,14 +82,21 @@ class Interactions(object):
         self.new_item_list = new_item_list
 
     def _filter_core(self): 
-        # TODO
-        # nead repeat
-        user_item_counts = self.data.groupby('user')['item'].transform('count')
-        item_user_counts = self.data.groupby('item')['user'].transform('count')
+        # 5core default
+        while True:
+            user_item_counts = self.data.groupby('user')['item'].transform('count')
+            item_user_counts = self.data.groupby('item')['user'].transform('count')
 
-        filtered_df = self.data[
-            (user_item_counts >= 5) & (item_user_counts >= 5)
-        ]
+            filtered_df = self.data[
+                (user_item_counts >= 5) & (item_user_counts >= 5)
+            ]
+
+            if len(filtered_df) < len(self.data):
+                self.data = filtered_df
+            else:
+                break
+
+        self.data.reset_index(drop=True, inplace=True)
 
     def _encode_id(self):
         token_uid = pd.Categorical(self.data[self.uid_name]).categories.to_numpy()
@@ -114,10 +121,10 @@ class Interactions(object):
 
     def build(self):
         self._load_raw_data()
-        self._encode_id()
-
         if self.prepro:
             self._filter_core()
+
+        self._encode_id()
 
         self._build_seq()
         self._build_dataset()
