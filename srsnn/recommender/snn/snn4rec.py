@@ -23,7 +23,6 @@ class SNN4Rec(nn.Module):
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
         self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
         self.emb_dropout = nn.Dropout(self.dropout_prob)
-        self.hidden = nn.Linear(self.embedding_size, self.embedding_size)
         self.dense = nn.Linear(self.embedding_size, self.embedding_size)
         self.bn = nn.BatchNorm1d(params['max_seq_len']) # self.embedding_size
 
@@ -41,7 +40,7 @@ class SNN4Rec(nn.Module):
 
         snn_output = 0.
         for _ in range(self.T):
-            X_t = self.hidden(item_seq_emb_dropout) 
+            X_t = item_seq_emb_dropout
             X_t = self.bn(X_t)
             snn_output = self.lif(X_t)
 
