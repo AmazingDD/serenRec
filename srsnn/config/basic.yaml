@@ -24,6 +24,8 @@ learning_rate: 0.001            # (float) Learning rate.
 weight_decay: 0.0               # (float) The weight decay value (L2 penalty) for optimizers.
 
 # Evaluation Settings
-metrics: ["MRR","NDCG","HR"]  # (list or str) Evaluation metrics.
+test_ratio: 0.2
+split_method: "fo"
+metrics: ["MRR","NDCG","HR"]    # (list or str) Evaluation metrics.
 topk: [10]                      # (list or int or None) The value of k for topk evaluation metrics.
 valid_metric: MRR@10            # (str) The evaluation metric for early stopping. 

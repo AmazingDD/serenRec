@@ -26,6 +26,7 @@ parser.add_argument('-model', default='bprmf', help='algo name')
 parser.add_argument('-prepro', default='5core', help='preprocessing method for dataset') # raw TODO
 parser.add_argument('-len', '--max_seq_len', default=20, type=int, help='max sequence length')
 parser.add_argument('-test_ratio', default=0.2, type=float, help='test ratio for fold-out split')
+parser.add_argument('-split_method', default='ufo', type=str, help='method for train-test split')
 parser.add_argument('-epochs', default=20, type=int, help='The number of training epochs.')
 parser.add_argument('-batch_size', default=128, type=int, help='batch size.')
 parser.add_argument('-wd', '--weight_decay', default=1e-4, type=float, help='weight decay')

@@ -19,6 +19,7 @@ class Interactions(object):
         self.inter_name = config['inter_name']
         self.time_name = config['time_name']
         self.test_ratio = config['test_ratio'] # 0.2
+        self.sm = config['split_method']
         self.prepro = config['prepro']
 
         self.encoding = encoding
@@ -69,7 +70,7 @@ class Interactions(object):
                 target_list.append(iid_col_arr[i])
                 item_list_length.append(i - seq_start)
 
-        uid_list = np.array(uid_list)
+        self.uid_list = np.array(uid_list)
         item_list_length = np.array(item_list_length, dtype=np.int64)
         
         new_length = len(items_list) # number of sequences
@@ -120,10 +121,33 @@ class Interactions(object):
         self.data[self.uid_name] = self.data[self.uid_name].map(self.uid_token)
         self.data[self.iid_name] = self.data[self.iid_name].map(self.iid_token)
 
+    def _grouped_index(self, group_by_list):
+        index = {}
+        for i, key in enumerate(group_by_list):
+            if key not in index:
+                index[key] = [i]
+            else:
+                index[key].append(i)
+        return index.values()
+
     def _build_dataset(self):
-        rnd_idx = torch.randperm(len(self.target_list))
-        split_point = int(len(self.target_list) * (1 - self.test_ratio))
-        train_idx, test_idx = rnd_idx[:split_point], rnd_idx[split_point:]
+        train_idx, test_idx = [], []
+        if self.sm == 'ufo':
+            print('fold-out by user')
+            grouped_index = self._grouped_index(self.uid_list)
+            for grouped_ids in grouped_index:
+                total_cnt = len(grouped_ids)
+                split_ids = int(total_cnt * (1 - self.test_ratio))
+                train_idx.extend(grouped_ids[0:split_ids])
+                test_idx.extend(grouped_ids[split_ids:total_cnt])
+        elif self.sm == 'fo':
+            print('random fold-out')
+            rnd_idx = torch.randperm(len(self.target_list))
+            split_point = int(len(self.target_list) * (1 - self.test_ratio))
+            train_idx, test_idx = rnd_idx[:split_point], rnd_idx[split_point:]
+        else:
+            raise ValueError(f'Invalid train test split method: {self.sm}')
+
         self.train_data = [self.new_item_list[train_idx], self.target_list[train_idx], self.item_list_len[train_idx]]
         self.test_data = [self.new_item_list[test_idx], self.target_list[test_idx], self.item_list_len[test_idx]]
 
