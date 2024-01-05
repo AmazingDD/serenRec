@@ -15,9 +15,9 @@ class BPRMF(nn.Module):
         self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
         self.lr = params['learning_rate'] # 1e-4
         self.wd = params['weight_decay'] # 5e-4
-        assert params['max_seq_len'] % params['T'] == 0, 'max_seq_len should be multiples of T!'
+        # assert params['max_seq_len'] % params['T'] == 0, 'max_seq_len should be multiples of T!'
         self.T = params['T']
-        self.step_size = int(params['max_seq_len'] / self.T)
+        # self.step_size = int(params['max_seq_len'] / self.T)
 
         self.n_items = item_num + 1 
         self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) 
