@@ -61,7 +61,7 @@ class BPRMF(nn.Module):
 
         uF /= self.T
 
-        item_embs = self.item_embedding(torch.arange(self.n_items)) # predict for all items, (n_item, dim)
+        item_embs = self.item_embedding(torch.arange(self.n_items).to(self.device)) # predict for all items, (n_item, dim)
         scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
 
         return scores
@@ -69,6 +69,9 @@ class BPRMF(nn.Module):
 
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
+
+        self.best_state_dict = None
+        best_kpi = -1
         for epoch in range(1, self.epochs + 1):
             self.train()
 
@@ -99,7 +102,11 @@ class BPRMF(nn.Module):
 
             self.scheduler.step()
 
+            train_time = time.time() - start_time
+            print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
+
             if valid_loader is not None:
+                start_time = time.time()
                 self.eval()
                 with torch.no_grad():
                     preds, last_item = self.predict(valid_loader, [10])
@@ -114,11 +121,11 @@ class BPRMF(nn.Module):
                     res_hr = hr.sum(axis=1).float().mean().item()
                     res_mrr = torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item()
                     res_ndcg = torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
-
-            train_time = time.time() - start_time
-            print(f'training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f} \tTrain Elapse: {train_time:.2f}s')
-            if valid_loader is not None:
-                print(f'Test Metrics: HR@10: {res_hr:.4f}, MRR@10: {res_mrr:.4f}, NDCG@10: {res_ndcg:.4f}')
+                if best_kpi < res_mrr:
+                    self.best_state_dict = self.state_dict()
+                    best_kpi = res_mrr
+                valid_time = time.time() - start_time
+                print(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
             
     def predict(self, test_loader, k:list=[15]):
         self.eval()

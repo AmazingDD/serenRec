@@ -153,10 +153,14 @@ class Interactions(object):
 
     def build(self):
         self._load_raw_data()
+        print('Finish load raw data')
         self._filter_core()
+        print(f'Finish {self.prepro} processing')
         self._encode_id()
+        print(f'Finish re-encoding iid and uid')
 
         self._build_seq()
+        print(f'Finish building sequences from original data')
         self._build_dataset()
         print('Finish load data')
 
@@ -194,4 +198,4 @@ def accuracy_calculator(pred, last_item):
         'NDCG': torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
     }
 
-    return metrics, topk
+    return metrics

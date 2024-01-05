@@ -14,7 +14,6 @@ class BPRMF(nn.Module):
         self.lr = params['learning_rate'] # 1e-4
         self.wd = params['weight_decay'] # 5e-4
 
-
         self.n_items = item_num + 1 # 多一个0代表空
         self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) # default embedding for item 0 is all zeros
         self.bn = nn.BatchNorm1d(self.n_factors)
@@ -29,7 +28,7 @@ class BPRMF(nn.Module):
             torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
             lengths.float().unsqueeze(dim=1) # B -> B,1
         ) # (B, dim)
-        item_embs = self.item_embedding(torch.arange(self.n_items)) # predict for all items, (n_item, dim)
+        item_embs = self.item_embedding(torch.arange(self.n_items).to(self.device)) # predict for all items, (n_item, dim)
         uF = self.bn(uF)
         scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
 
@@ -38,6 +37,9 @@ class BPRMF(nn.Module):
 
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
+
+        self.best_state_dict = None
+        best_kpi = -1
         for epoch in range(1, self.epochs + 1):
             self.train()
 
@@ -67,8 +69,11 @@ class BPRMF(nn.Module):
                 sample_num += target.numel()
             
             # self.scheduler.step()
+            train_time = time.time() - start_time
+            print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
 
             if valid_loader is not None:
+                start_time = time.time()
                 self.eval()
                 with torch.no_grad():
                     preds, last_item = self.predict(valid_loader, [10])
@@ -84,10 +89,11 @@ class BPRMF(nn.Module):
                     res_mrr = torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item()
                     res_ndcg = torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
 
-            train_time = time.time() - start_time
-            print(f'training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f} \tTrain Elapse: {train_time:.2f}s')
-            if valid_loader is not None:
-                print(f'Test Metrics: HR@10: {res_hr:.4f}, MRR@10: {res_mrr:.4f}, NDCG@10: {res_ndcg:.4f}')
+                if best_kpi < res_mrr:
+                    self.best_state_dict = self.state_dict()
+                    best_kpi = res_mrr
+                valid_time = time.time() - start_time
+                print(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
             
     def predict(self, test_loader, k:list=[10]):
         self.eval()

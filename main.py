@@ -89,10 +89,13 @@ print('Start training...')
 model.fit(train_dataloader, test_dataloader)
 print('Finish training')
 
-# preds, last_item = model.predict(test_dataloader, k=config['topk']) # top10 default
+model.load_state_dict(model.best_state_dict)
+preds, last_item = model.predict(test_dataloader, k=config['topk']) # top10 default
 
-# print('The prediction results is:')
-# for pred in preds:
-#     metrics, k = accuracy_calculator(pred, last_item, config['metrics'])
-#     for kpi in config['metrics']:
-#         print(f'{kpi}@{k}: {metrics[kpi]:.4f}')
+print('The prediction results for test set is:')
+for topk in config['topk']:
+    pred = preds[topk]
+    metrics = accuracy_calculator(pred, last_item)
+    for kpi in config['metrics']:
+        print(f'{kpi}@{topk}: {metrics[kpi]:.4f}')
+    print('-----------------')
