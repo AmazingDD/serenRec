@@ -8,6 +8,8 @@ import torch
 from srsnn.utils import *
 from srsnn.recommender.ann.conventions import BPRMF as ANNBPRMF
 from srsnn.recommender.snn.conventions import BPRMF as SNNBPRMF
+from srsnn.recommender.ann.gru4rec import GRU4Rec
+from srsnn.recommender.snn.snn4rec import SNN4Rec
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -35,6 +37,7 @@ parser.add_argument('-T', default=5, type=int, help='simulating time-steps')
 parser.add_argument('-tau', default=4./3, type=float, help='time constant of LIF neuron')
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding dimension for items')
+parser.add_argument('-dp', '--dropout_prob', default=0.3, type=float, help='probability for dropout layer')
 
 args = parser.parse_args()
 config.update(vars(args))
@@ -79,16 +82,27 @@ test_dataloader = get_dataloader(test_dataset, batch_size=config['batch_size'], 
 
 print(config)
 if config['act'] == 'ann':
-    model = ANNBPRMF(item_num, config)
+    if config['model'] == 'bprmf':
+        model = ANNBPRMF(item_num, config)
+    elif config['model'] == 'gru4rec':
+        model = GRU4Rec(item_num, config)
+    else:
+        raise ValueError(f'Invalid model name: {config["model"]}')
 elif config['act'] == 'snn':
-    model = SNNBPRMF(item_num, config)
+    if config['model'] == 'bprmf':
+        model = SNNBPRMF(item_num, config)
+    elif config['model'] == 'snn4rec':
+        model = SNN4Rec(item_num, config)
+    else:
+        raise ValueError(f'Invalid model name: {config["model"]}')
 else:
-    raise ValueError('Invalid activation name...')
+    raise ValueError(f'Invalid activation name: {config["act"]}')
 
 print('Start training...')
 model.fit(train_dataloader, test_dataloader)
 print('Finish training')
 
+print('Reloading model with the best parameters for prediction performace')
 model.load_state_dict(model.best_state_dict)
 preds, last_item = model.predict(test_dataloader, k=config['topk']) # top10 default
 
@@ -97,5 +111,6 @@ for topk in config['topk']:
     pred = preds[topk]
     metrics = accuracy_calculator(pred, last_item)
     for kpi in config['metrics']:
+        print('-----------------')
         print(f'{kpi}@{topk}: {metrics[kpi]:.4f}')
     print('-----------------')

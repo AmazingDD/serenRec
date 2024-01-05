@@ -4,35 +4,49 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class BPRMF(nn.Module):
+class GRU4Rec(nn.Module):
     def __init__(self, item_num, params):
-        super(BPRMF, self).__init__()
-        self.n_factors = params['item_embedding_dim']
-        self.epochs = params['epochs']
-        self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
-        self.lr = params['learning_rate'] # 1e-4
-        self.wd = params['weight_decay'] # 5e-4
+        super(GRU4Rec, self).__init__()
 
-        self.n_items = item_num + 1 # 多一个0代表空
-        self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) # default embedding for item 0 is all zeros
+        self.embedding_size = params['item_embedding_dim']
+        self.hidden_size = params['item_embedding_dim'] # params['hidden_size']
+        self.num_layers = 1 # params['num_layers']
+        self.dropout_prob = params['dropout_prob']
+        self.epochs = params['epochs']
+        self.device = params['device'] if torch.cuda.is_available() else 'cpu'
+        self.lr = params['learning_rate'] 
+        self.wd = params['weight_decay'] 
+
+        self.n_items = item_num + 1
+        self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
+        self.emb_dropout = nn.Dropout(self.dropout_prob)
+        self.gru_layers = nn.GRU(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            bias=False,
+            batch_first=True,
+        )
+        
+        self.dense = nn.Linear(self.hidden_size, self.embedding_size)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
-        # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
-                
-    def forward(self, seq, lengths):
-        item_seq_emb = self.item_embedding(seq)
 
-        uF = torch.div(
-            torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-            lengths.float().unsqueeze(dim=1) # B -> B,1
-        ) # (B, dim)
-        item_embs = self.item_embedding(torch.arange(self.n_items).to(self.device)) # predict for all items, (n_item, dim)
-        scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
+    def gather_indexes(self, output, gather_index):
+        gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1]) # (B)->(B, 1, D)
+        output_tensor = output.gather(dim=1, index=gather_index)
+        return output_tensor.squeeze(1)
 
-        return scores
+    def forward(self, item_seq, item_seq_len):
+        item_seq_emb = self.item_embedding(item_seq) 
+        item_seq_emb_dropout = self.emb_dropout(item_seq_emb)
 
-
+        gru_output, _ = self.gru_layers(item_seq_emb_dropout)
+        gru_output = self.dense(gru_output)
+        # the embedding of the predicted item, shape of (batch_sizeinnu, embedding_size)
+        seq_output = self.gather_indexes(gru_output, item_seq_len - 1) # gather the last index 
+        return seq_output
+    
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
 
@@ -47,26 +61,21 @@ class BPRMF(nn.Module):
             start_time = time.time()
             for seq, target, lens in train_loader:
                 self.optimizer.zero_grad()
-
                 seq = seq.to(self.device) # (B,max_len)
                 target = target.to(self.device) # (B)
                 lens = lens.to(self.device) # (B)
 
-                logit = self.forward(seq, lens)
-
-                logit_sampled = logit[:, target.view(-1)] # 选出这一组batch中各个batch的next item groundtruth，对于这个方阵，对角线的位置是对应的真正GT
-
-                # differences between the item scores
-                diff = logit_sampled.diag().view(-1, 1).expand_as(logit_sampled) - logit_sampled # positive - negative
-                loss = -torch.mean(F.logsigmoid(diff)) # BPR loss
+                seq_output = self.forward(seq, lens) # (B, D)
+                test_item_emb = self.item_embedding.weight # (N, D)
+                logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1)) # (B, N)
+                loss = F.cross_entropy(logits, target)
 
                 loss.backward()
                 self.optimizer.step()
-                
+
                 total_loss += loss.item()
                 sample_num += target.numel()
-            
-            # self.scheduler.step()
+
             train_time = time.time() - start_time
             print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
 
@@ -91,7 +100,7 @@ class BPRMF(nn.Module):
                     best_kpi = res_mrr
                 valid_time = time.time() - start_time
                 print(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
-            
+
     def predict(self, test_loader, k:list=[10]):
         self.eval()
 
@@ -102,8 +111,11 @@ class BPRMF(nn.Module):
             seq = seq.to(self.device)
             lens = lens.to(self.device)
 
-            scores = self.forward(seq, lens) # B, n_item, here n_item=true item num + 1
-            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1 # [:, 1:] to delect item 0, +1 to represent the actual code of items
+            seq_output = self.forward(seq, lens) 
+            test_items_emb = self.item_embedding.weight
+            scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1)) # (B, D), (N, D)->(B, N)
+
+            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1 
 
             for topk in k:
                 preds[topk] = torch.cat((preds[topk], rank_list[:, :topk].cpu()), 0)

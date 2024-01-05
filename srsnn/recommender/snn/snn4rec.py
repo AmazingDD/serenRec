@@ -6,67 +6,50 @@ import torch.nn.functional as F
 
 from spikingjelly.activation_based import neuron, surrogate, functional
 
-
-class BPRMF(nn.Module):
+class SNN4Rec(nn.Module):
     def __init__(self, item_num, params):
-        super(BPRMF, self).__init__()
-        self.n_factors = params['item_embedding_dim']
+        super(SNN4Rec, self).__init__()
+
         self.epochs = params['epochs']
-        self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
-        self.lr = params['learning_rate'] # 1e-4
-        self.wd = params['weight_decay'] # 5e-4
-        # assert params['max_seq_len'] % params['T'] == 0, 'max_seq_len should be multiples of T!'
+        self.device = params['device'] if torch.cuda.is_available() else 'cpu'
+        self.lr = params['learning_rate'] 
+        self.wd = params['weight_decay'] 
         self.T = params['T']
-        # self.step_size = int(params['max_seq_len'] / self.T)
 
-        self.n_items = item_num + 1 
-        self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) 
+        self.embedding_size = params['item_embedding_dim']
+        self.dropout_prob = params['dropout_prob']
 
+        self.n_items = item_num + 1
+        self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
         self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
-        self.bn = nn.BatchNorm1d(self.n_factors)
+        self.emb_dropout = nn.Dropout(self.dropout_prob)
+        self.hidden = nn.Linear(self.embedding_size, self.embedding_size)
+        self.dense = nn.Linear(self.embedding_size, self.embedding_size)
+        self.bn = nn.BatchNorm1d(params['max_seq_len']) # self.embedding_size
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
-                
-    def forward(self, seq, lengths):
-        uF = 0.
 
-        # temp_seq = torch.zeros_like(seq)
-        # temp_seq = temp_seq.to(self.device)
-        # for t in range(1, self.T + 1):
-        #     temp_seq = temp_seq.clone()
-        #     t *= self.step_size
-        #     temp_seq[:, :t] = seq[:, :t] 
-        #     temp_lengths = torch.tensor([t]).expand_as(lengths)
-        #     temp_lengths = temp_lengths.to(self.device)
-        #     temp_lengths = torch.where(temp_lengths >= lengths, lengths, temp_lengths)
+    def gather_indexes(self, output, gather_index):
+        gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1])
+        output_tensor = output.gather(dim=1, index=gather_index)
+        return output_tensor.squeeze(1)
 
-        #     item_seq_emb = self.item_embedding(temp_seq)
-        #     temp_uF = torch.div(
-        #         torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-        #         temp_lengths.float().unsqueeze(dim=1) # B -> B,1
-        #     ) # (B, dim)
+    def forward(self, item_seq, item_seq_len):
+        item_seq_emb = self.item_embedding(item_seq) 
+        item_seq_emb_dropout = self.emb_dropout(item_seq_emb)
 
-        #     temp_uF = self.bn(temp_uF)
-        #     uF += self.lif(temp_uF)
-
-        item_seq_emb = self.item_embedding(seq)
+        snn_output = 0.
         for _ in range(self.T):
-            temp_uF = torch.div(
-                torch.sum(item_seq_emb, dim=1),
-                lengths.float().unsqueeze(dim=1)
-            )
-            temp_uF = self.bn(temp_uF)
-            uF += self.lif(temp_uF)
+            X_t = self.hidden(item_seq_emb_dropout) 
+            X_t = self.bn(X_t)
+            snn_output = self.lif(X_t)
 
-        uF /= self.T
+        snn_output = self.dense(snn_output)
+        seq_output = self.gather_indexes(snn_output, item_seq_len - 1)
 
-        item_embs = self.item_embedding(torch.arange(self.n_items).to(self.device)) # predict for all items, (n_item, dim)
-        scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
-
-        return scores
-
-
+        return seq_output
+    
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
 
@@ -81,20 +64,18 @@ class BPRMF(nn.Module):
             start_time = time.time()
             for seq, target, lens in train_loader:
                 self.optimizer.zero_grad()
-
                 seq = seq.to(self.device) # (B,max_len)
                 target = target.to(self.device) # (B)
                 lens = lens.to(self.device) # (B)
 
-                logit = self.forward(seq, lens)
-                logit_sampled = logit[:, target.view(-1)]
-
-                diff = logit_sampled.diag().view(-1, 1).expand_as(logit_sampled) - logit_sampled
-                loss = -torch.mean(F.logsigmoid(diff)) # BPR loss
+                seq_output = self.forward(seq, lens) # (B, D)
+                test_item_emb = self.item_embedding.weight # (N, D)
+                logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1)) # (B, N)
+                loss = F.cross_entropy(logits, target)
 
                 loss.backward()
                 self.optimizer.step()
-                
+
                 total_loss += loss.item()
                 sample_num += target.numel()
 
@@ -120,13 +101,14 @@ class BPRMF(nn.Module):
                     res_hr = hr.sum(axis=1).float().mean().item()
                     res_mrr = torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item()
                     res_ndcg = torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
+
                 if best_kpi < res_mrr:
                     self.best_state_dict = self.state_dict()
                     best_kpi = res_mrr
                 valid_time = time.time() - start_time
                 print(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
-            
-    def predict(self, test_loader, k:list=[15]):
+
+    def predict(self, test_loader, k:list=[10]):
         self.eval()
 
         preds = {topk : torch.tensor([]) for topk in k}
@@ -136,14 +118,18 @@ class BPRMF(nn.Module):
             seq = seq.to(self.device)
             lens = lens.to(self.device)
 
-            scores = self.forward(seq, lens) # B, n_item, here n_item=true item num + 1
-            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1 # [:, 1:] to delect item 0, +1 to represent the actual code of items
+            seq_output = self.forward(seq, lens) 
+            test_items_emb = self.item_embedding.weight
+            scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1)) # (B, D), (N, D)->(B, N)
+
+            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1 
 
             for topk in k:
-                preds[topk] = torch.cat((preds[topk], rank_list[:,:topk].cpu()), 0)
+                preds[topk] = torch.cat((preds[topk], rank_list[:, :topk].cpu()), 0)
         
             last_item = torch.cat((last_item, target), 0)
 
             functional.reset_net(self)
 
         return preds, last_item
+
