@@ -40,8 +40,6 @@ class Interactions(object):
             raise NameError(f'Invalid dataset name: {self.dataset}')
         
         self.data.drop_duplicates([self.uid_name, self.iid_name], keep='last', ignore_index=True)
-        self.user_num = self.data[self.uid_name].nunique()
-        self.item_num = self.data[self.iid_name].nunique()
         
     def _build_seq(self):
         if self.time_name is not None:
@@ -120,6 +118,9 @@ class Interactions(object):
         # tokenize columns
         self.data[self.uid_name] = self.data[self.uid_name].map(self.uid_token)
         self.data[self.iid_name] = self.data[self.iid_name].map(self.iid_token)
+
+        self.user_num = self.data[self.uid_name].nunique()
+        self.item_num = self.data[self.iid_name].nunique()
 
     def _grouped_index(self, group_by_list):
         index = {}

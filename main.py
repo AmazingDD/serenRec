@@ -10,6 +10,7 @@ from srsnn.recommender.ann.conventions import BPRMF as ANNBPRMF
 from srsnn.recommender.snn.conventions import BPRMF as SNNBPRMF
 from srsnn.recommender.ann.gru4rec import GRU4Rec
 from srsnn.recommender.snn.snn4rec import SNN4Rec
+from srsnn.recommender.ann.sasrec import SASRec
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -37,6 +38,8 @@ parser.add_argument('-T', default=5, type=int, help='simulating time-steps')
 parser.add_argument('-tau', default=4./3, type=float, help='time constant of LIF neuron')
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding dimension for items')
+parser.add_argument('-nl', '--num_layers', default=2, type=int, help='number of certain layers')
+parser.add_argument('-nh', '--num_heads', default=2, type=int, help='number of heads for attention mechanism')
 parser.add_argument('-dp', '--dropout_prob', default=0.3, type=float, help='probability for dropout layer')
 
 args = parser.parse_args()
@@ -86,6 +89,8 @@ if config['act'] == 'ann':
         model = ANNBPRMF(item_num, config)
     elif config['model'] == 'gru4rec':
         model = GRU4Rec(item_num, config)
+    elif config['model'] == 'sasrec':
+        model = SASRec(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 elif config['act'] == 'snn':
