@@ -197,8 +197,6 @@ class SASRec(nn.Module):
         # attn_dropout_prob: 0.5          # (float) The probability of an attention score to be zeroed.
         # hidden_act: 'gelu'              # (str) The activation function in feed-forward layer.
         # layer_norm_eps: 1e-12           # (float) A value added to the denominator for numerical stability. 
-        # initializer_range: 0.02         # (float) The standard deviation for normal initialization.
-        # loss_type: 'CE'
         super(SASRec, self).__init__()
 
         self.epochs = params['epochs']
@@ -217,7 +215,6 @@ class SASRec(nn.Module):
 
         self.hidden_act = 'gelu' # params["hidden_act"]
         self.layer_norm_eps = 1e-12 # params["layer_norm_eps"]
-        self.initializer_range = 0.02 # params["initializer_range"]
 
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.hidden_size, padding_idx=0)

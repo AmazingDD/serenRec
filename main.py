@@ -11,6 +11,7 @@ from srsnn.recommender.snn.conventions import BPRMF as SNNBPRMF
 from srsnn.recommender.ann.gru4rec import GRU4Rec
 from srsnn.recommender.snn.snn4rec import SNN4Rec
 from srsnn.recommender.ann.sasrec import SASRec
+from srsnn.recommender.snn.sfsrec import SFSRec
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -98,6 +99,8 @@ elif config['act'] == 'snn':
         model = SNNBPRMF(item_num, config)
     elif config['model'] == 'snn4rec':
         model = SNN4Rec(item_num, config)
+    elif config['model'] == 'sfsrec':
+        model = SFSRec(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 else:
@@ -115,7 +118,7 @@ print('The prediction results for test set is:')
 for topk in config['topk']:
     pred = preds[topk]
     metrics = accuracy_calculator(pred, last_item)
+    print('-----------------')
     for kpi in config['metrics']:
-        print('-----------------')
         print(f'{kpi}@{topk}: {metrics[kpi]:.4f}')
     print('-----------------')
