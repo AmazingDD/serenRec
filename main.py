@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser(description='SNN for sequential recommendation 
 parser.add_argument('-data_dir', type=str, default='.', help='root dir of dataset')
 parser.add_argument('-gpu_id', type=str, default='0', help='gpu card id')
 parser.add_argument('-use_cuda', action='store_true', help='use gpu to run code')
-parser.add_argument('-worker', default=0, type=int, help='number of workers for dataloader')
+parser.add_argument('-worker', default=4, type=int, help='number of workers for dataloader') # 0
 parser.add_argument('-shuffle', action='store_false', help='Whether or not to shuffle the training data before each epoch.')
 # Training Settings
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')

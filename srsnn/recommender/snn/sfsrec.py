@@ -1,12 +1,10 @@
 import time
-import math
-import copy
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spikingjelly.activation_based import surrogate, neuron, functional
+from spikingjelly.activation_based import surrogate, neuron, functional, layer
 
 class MLP(nn.Module):
     ''' FeedForward in spikeformer '''
@@ -14,28 +12,28 @@ class MLP(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1_linear = nn.Linear(in_features, hidden_features)
+        self.fc1_linear = layer.Linear(in_features, hidden_features)
         self.fc1_ln = nn.LayerNorm(hidden_features)
         self.fc1_lif = neuron.LIFNode(tau=2.0, detach_reset=True)
 
-        self.fc2_linear = nn.Linear(hidden_features, out_features)
+        self.fc2_linear = layer.Linear(hidden_features, out_features)
         self.fc2_ln = nn.LayerNorm(out_features)
         self.fc2_lif = neuron.LIFNode(tau=2.0, detach_reset=True)  # remember multistep
 
-        # self.c_hidden = hidden_features
+        self.c_hidden = hidden_features
         # self.c_output = out_features
 
     def forward(self, x):
-        B, L, H = x.shape
-        x = self.fc1_linear(x)  # (B, L, H) -> (B, L, c_hidden)
-        x = self.fc1_ln(x)
-        x = self.fc1_lif(x) # (B, L, c_hidden)
+        T, B, L, H = x.shape
+        x = self.fc1_linear(x)  # (T, B, L, H) -> (T, B, L, c_hidden)
+        x = self.fc1_ln(x.flatten(0, 1)).reshape(T, B, L, self.c_hidden).contiguous()
+        x = self.fc1_lif(x) # (T, B, L, c_hidden)
 
-        x = self.fc2_linear(x) # (B, L, c_hidden)-> (B, L, H)
-        x = self.fc2_ln(x)
+        x = self.fc2_linear(x) # -> (T, B, L, H)
+        x = self.fc2_ln(x.flatten(0, 1)).reshape(T, B, L, H).contiguous()
         x = self.fc2_lif(x)
 
-        return x
+        return x # -> (T, B, L, H)
     
 class SSA(nn.Module):
     def __init__(self, dim, num_heads=2, qkv_bias=False, qk_scale=None):
@@ -45,52 +43,53 @@ class SSA(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.scale = qk_scale # 0.125
-        self.q_linear = nn.Linear(dim, dim, bias=qkv_bias)
+        self.q_linear = layer.Linear(dim, dim, bias=qkv_bias)
         self.q_ln = nn.LayerNorm(dim)
         self.q_lif = neuron.LIFNode(tau=2.0, detach_reset=True)
 
-        self.k_linear = nn.Linear(dim, dim, bias=qkv_bias)
+        self.k_linear = layer.Linear(dim, dim, bias=qkv_bias)
         self.k_ln = nn.LayerNorm(dim)
         self.k_lif = neuron.LIFNode(tau=2.0, detach_reset=True)
 
-        self.v_linear = nn.Linear(dim, dim, bias=qkv_bias)
+        self.v_linear = layer.Linear(dim, dim, bias=qkv_bias)
         self.v_ln = nn.LayerNorm(dim)
         self.v_lif = neuron.LIFNode(tau=2.0, detach_reset=True)
         self.attn_lif = neuron.LIFNode(tau=2.0, v_threshold=0.5, detach_reset=True)
 
-        self.proj_linear = nn.Linear(dim, dim)
+        self.proj_linear = layer.Linear(dim, dim)
         self.proj_ln = nn.LayerNorm(dim)
         self.proj_lif = neuron.LIFNode(tau=2.0, detach_reset=True)
 
     def forward(self, x):
-        B, L, H = x.shape
+        T, B, L, H = x.shape
 
-        x_for_qkv = x.clone() # B, L, H
+        x_for_qkv = x.clone() # T, B, L, H
 
-        q_linear_out = self.q_linear(x_for_qkv)  # B, L, H -> B, N, H
-        q_linear_out = self.q_ln(q_linear_out)
+        q_linear_out = self.q_linear(x_for_qkv)  # T, B, L, H -> T, B, L, H
+        q_linear_out = self.q_ln(q_linear_out.flatten(0, 1)).reshape(T, B, L, H).contiguous()
         q_linear_out = self.q_lif(q_linear_out)
-        q = q_linear_out.reshape(B, L, self.num_heads, H // self.num_heads).permute(0, 2, 1, 3).contiguous() # B, L, H -> B, L, head_num, head_dim -> B, head_num, L, head_dim 
+        q = q_linear_out.reshape(T, B, L, self.num_heads, H // self.num_heads).permute(0, 1, 3, 2, 4).contiguous() # T, B, L, H -> T, B, L, head_num, head_dim -> T, B, head_num, L, head_dim 
 
         k_linear_out = self.k_linear(x_for_qkv)
-        k_linear_out = self.k_ln(k_linear_out)
+        k_linear_out = self.k_ln(k_linear_out.flatten(0, 1)).reshape(T, B, L, H).contiguous()
         k_linear_out = self.k_lif(k_linear_out)
-        k = k_linear_out.reshape(B, L, self.num_heads, H // self.num_heads).permute(0, 2, 1, 3).contiguous()
+        k = k_linear_out.reshape(T, B, L, self.num_heads, H // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
         v_linear_out = self.v_linear(x_for_qkv)
-        v_linear_out = self.v_ln(v_linear_out)
+        v_linear_out = self.v_ln(v_linear_out.flatten(0, 1)).reshape(T, B, L, H).contiguous()
         v_linear_out = self.v_lif(v_linear_out)
-        v = v_linear_out.reshape(B, L, self.num_heads, H // self.num_heads).permute(0, 2, 1, 3).contiguous()
+        v = v_linear_out.reshape(T, B, L, self.num_heads, H // self.num_heads).permute(0, 1, 3, 2, 4).contiguous()
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale # -> B * head_num * L * L
-        x = attn @ v # -> B * head_num * L * head_dim
-        x = x.transpose(1, 2).reshape(B, L, H).contiguous() # -> B * L * head_num * head_dim -> B * L * H
+        attn = (q @ k.transpose(-2, -1)) * self.scale # -> (T, B, head_num, L, L)
+        x = attn @ v # -> (T, B, head_num, L, head_dim)
+        x = x.transpose(2, 3).reshape(T, B, L, H).contiguous() # -> (T, B, L, head_num, head_dim) -> (T, B, L, H)
         x = self.attn_lif(x)
 
-        x = self.proj_ln(self.proj_linear(x)).reshape(B, L, H)
+        x = self.proj_linear(x)
+        x = self.proj_ln(x.flatten(0, 1)).reshape(T, B, L, H).contiguous()
         x = self.proj_lif(x)
 
-        return x # (B, L, H)
+        return x # (T, B, L, H)
 
 class Block(nn.Module):
     ''' Spikeformer Block '''
@@ -101,10 +100,9 @@ class Block(nn.Module):
         self.mlp = MLP(in_features=dim, hidden_features=mlp_hidden_dim)
 
     def forward(self, x):
-        # x: (B, L, H)
-        x = x + self.attn(x) # (B, L, H)
-        x = x + self.mlp(x) # (B, L, H)
-        return x # (B, L, H)
+        x = x + self.attn(x) # (T, B, L, H)
+        x = x + self.mlp(x) # (T, B, L, H)
+        return x # (T, B, L, H)
 
 class SFSRec(nn.Module):
     '''SpikeFormer for Sequential Recommendation'''
@@ -127,29 +125,19 @@ class SFSRec(nn.Module):
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.hidden_size, padding_idx=0)
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size)
-        self.dropout = nn.Dropout(self.hidden_dropout_prob)
+
         self.LayerNorm = nn.LayerNorm(self.hidden_size, eps=self.layer_norm_eps)
         self.rpe_lif = neuron.LIFNode(tau=2.0, detach_reset=True, surrogate_function=surrogate.ATan())
-        
-        self.head_ln = nn.LayerNorm(self.hidden_size)
         self.head = nn.Linear(self.hidden_size, self.hidden_size)
 
         self.blocks = nn.ModuleList(
             [Block(dim=self.hidden_size, num_heads=self.n_heads, mlp_ratio=4., qkv_bias=False, qk_scale=0.125) for _ in range(self.n_layers)]
         )
 
+        functional.set_step_mode(self, 'm')
+
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0.0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.weight, 1.0)
-            nn.init.constant_(m.bias, 0.0)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
 
     def gather_indexes(self, output, gather_index):
         gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1]) # (B)->(B, 1, D)
@@ -157,28 +145,27 @@ class SFSRec(nn.Module):
         return output_tensor.squeeze(1)
     
     def forward_features(self, item_seq):
+        # feature extrator
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
         item_emb = self.item_embedding(item_seq)
         input_emb = item_emb + position_embedding
+        input_emb = self.LayerNorm(input_emb) # (B, L, H)
 
-        input_emb = self.LayerNorm(input_emb)
-        input_emb = self.dropout(input_emb)
-        x = self.rpe_lif(input_emb) # (B, L, H)
+        input_emb = input_emb.unsqueeze(0).repeat(self.T, 1, 1, 1) # ->(T, B, L, H)
+        x = self.rpe_lif(input_emb) 
 
+        # start spikeformer parts
         for blk in self.blocks:
             x = blk(x)
-        return x # (B, L, H) # x.mean(1)
+        return x # (T, B, L, H) 
 
     def forward(self, item_seq, item_seq_len):
-        output = 0.
-        for _ in range(self.T):
-            x = self.forward_features(item_seq)
-            x = self.head_ln(x)
-            x = self.head(x) # (B, L, H)
-            output += self.gather_indexes(x, item_seq_len - 1) # (B, H)
-        output /= self.T
+        x = self.forward_features(item_seq)
+        x = x.mean(0) # (T, B, L, H) -> (B, L, H)
+        x = self.head(x) # -> (B, L, H)
+        output = self.gather_indexes(x, item_seq_len - 1) # (B, H)
 
         return output
     
@@ -212,6 +199,8 @@ class SFSRec(nn.Module):
                 sample_num += target.numel()
 
                 functional.reset_net(self)
+
+            self.scheduler.step()
 
             train_time = time.time() - start_time
             print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
