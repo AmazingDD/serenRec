@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spikingjelly.activation_based import neuron, surrogate, functional, layer
+from spikingjelly.activation_based import neuron, surrogate, functional
 
 
 class SMF(nn.Module):

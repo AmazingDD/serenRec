@@ -20,7 +20,6 @@ class MF(nn.Module):
         self.ln = nn.LayerNorm(self.n_factors)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
-        # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
                 
     def forward(self, seq, lengths):
         item_seq_emb = self.item_embedding(seq)
@@ -69,7 +68,6 @@ class MF(nn.Module):
                 total_loss += loss.item()
                 sample_num += target.numel()
             
-            # self.scheduler.step()
             train_time = time.time() - start_time
             print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
 
