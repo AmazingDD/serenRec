@@ -6,12 +6,14 @@ import argparse
 import torch
 
 from srsnn.utils import *
-from srsnn.recommender.ann.conventions import BPRMF as ANNBPRMF
-from srsnn.recommender.snn.conventions import BPRMF as SNNBPRMF
+from srsnn.recommender.ann.conventions import MF
+from srsnn.recommender.snn.conventions import SMF
 from srsnn.recommender.ann.gru4rec import GRU4Rec
-from srsnn.recommender.snn.snn4rec import SNN4Rec
+from srsnn.recommender.snn.sgru4rec import SGRU4Rec
 from srsnn.recommender.ann.sasrec import SASRec
 from srsnn.recommender.snn.sfsrec import SFSRec
+from srsnn.recommender.ann.caser import Caser
+from srsnn.recommender.snn.scaser import Scaser
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -26,7 +28,7 @@ parser.add_argument('-shuffle', action='store_false', help='Whether or not to sh
 # Training Settings
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')
 parser.add_argument('-act', default='ann', help='algo type name')
-parser.add_argument('-model', default='bprmf', help='algo name')
+parser.add_argument('-model', default='mf', help='algo name')
 parser.add_argument('-prepro', default='5core', help='preprocessing method for dataset') # raw TODO
 parser.add_argument('-len', '--max_seq_len', default=20, type=int, help='max sequence length')
 parser.add_argument('-test_ratio', default=0.2, type=float, help='test ratio for fold-out split')
@@ -42,6 +44,7 @@ parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding
 parser.add_argument('-nl', '--num_layers', default=2, type=int, help='number of certain layers')
 parser.add_argument('-nh', '--num_heads', default=2, type=int, help='number of heads for attention mechanism')
 parser.add_argument('-dp', '--dropout_prob', default=0.3, type=float, help='probability for dropout layer')
+parser.add_argument('-reg', '--reg_weight', default=1e-4, type=float, help='regularization weight.')
 
 args = parser.parse_args()
 config.update(vars(args))
@@ -86,21 +89,25 @@ test_dataloader = get_dataloader(test_dataset, batch_size=config['batch_size'], 
 
 print(config)
 if config['act'] == 'ann':
-    if config['model'] == 'bprmf':
-        model = ANNBPRMF(item_num, config)
+    if config['model'] == 'mf':
+        model = MF(item_num, config)
     elif config['model'] == 'gru4rec':
         model = GRU4Rec(item_num, config)
     elif config['model'] == 'sasrec':
         model = SASRec(item_num, config)
+    elif config['model'] == 'caser':
+        model = Caser(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 elif config['act'] == 'snn':
-    if config['model'] == 'bprmf':
-        model = SNNBPRMF(item_num, config)
-    elif config['model'] == 'snn4rec':
-        model = SNN4Rec(item_num, config)
+    if config['model'] == 'mf':
+        model = SMF(item_num, config)
+    elif config['model'] == 'sgru4rec':
+        model = SGRU4Rec(item_num, config)
     elif config['model'] == 'sfsrec':
         model = SFSRec(item_num, config)
+    elif config['model'] == 'scaser':
+        model = Scaser(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 else:

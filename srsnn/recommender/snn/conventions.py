@@ -4,65 +4,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spikingjelly.activation_based import neuron, surrogate, functional
+from spikingjelly.activation_based import neuron, surrogate, functional, layer
 
 
-class BPRMF(nn.Module):
+class SMF(nn.Module):
+    ''' Spike MF with BPR loss '''
     def __init__(self, item_num, params):
-        super(BPRMF, self).__init__()
+        super(SMF, self).__init__()
         self.n_factors = params['item_embedding_dim']
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
         self.lr = params['learning_rate'] # 1e-4
         self.wd = params['weight_decay'] # 5e-4
-        # assert params['max_seq_len'] % params['T'] == 0, 'max_seq_len should be multiples of T!'
         self.T = params['T']
-        # self.step_size = int(params['max_seq_len'] / self.T)
 
         self.n_items = item_num + 1 
         self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) 
 
         self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
-        self.bn = nn.BatchNorm1d(self.n_factors)
+        self.ln = nn.LayerNorm(self.n_factors)
 
+        functional.set_step_mode(self, 'm')
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
                 
     def forward(self, seq, lengths):
-        uF = 0.
-
-        # temp_seq = torch.zeros_like(seq)
-        # temp_seq = temp_seq.to(self.device)
-        # for t in range(1, self.T + 1):
-        #     temp_seq = temp_seq.clone()
-        #     t *= self.step_size
-        #     temp_seq[:, :t] = seq[:, :t] 
-        #     temp_lengths = torch.tensor([t]).expand_as(lengths)
-        #     temp_lengths = temp_lengths.to(self.device)
-        #     temp_lengths = torch.where(temp_lengths >= lengths, lengths, temp_lengths)
-
-        #     item_seq_emb = self.item_embedding(temp_seq)
-        #     temp_uF = torch.div(
-        #         torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
-        #         temp_lengths.float().unsqueeze(dim=1) # B -> B,1
-        #     ) # (B, dim)
-
-        #     temp_uF = self.bn(temp_uF)
-        #     uF += self.lif(temp_uF)
-
         item_seq_emb = self.item_embedding(seq)
-        for _ in range(self.T):
-            temp_uF = torch.div(
-                torch.sum(item_seq_emb, dim=1),
-                lengths.float().unsqueeze(dim=1)
-            )
-            temp_uF = self.bn(temp_uF)
-            uF += self.lif(temp_uF)
+        uF = torch.div(
+            torch.sum(item_seq_emb, dim=1),
+            lengths.float().unsqueeze(dim=1)
+        ) # (B, D)
+        uF = self.ln(uF) # (B, D)
+        uF = uF.unsqueeze(0).repeat(self.T, 1, 1)
+        uF = self.lif(uF) # (T, B, D)
+        uF = uF.mean(0) # (B, D)
 
-        uF /= self.T
-
-        item_embs = self.item_embedding(torch.arange(self.n_items).to(self.device)) # predict for all items, (n_item, dim)
-        scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
+        test_item_emb = self.item_embedding.weight # (n_item, D)
+        scores = torch.matmul(uF, test_item_emb.transpose(0, 1)) # (B, n_item)
 
         return scores
 

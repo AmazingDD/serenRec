@@ -4,11 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spikingjelly.activation_based import neuron, surrogate, functional
+from spikingjelly.activation_based import neuron, surrogate, functional, layer
 
-class SNN4Rec(nn.Module):
+class SGRU4Rec(nn.Module):
     def __init__(self, item_num, params):
-        super(SNN4Rec, self).__init__()
+        super(SGRU4Rec, self).__init__()
 
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
@@ -17,15 +17,25 @@ class SNN4Rec(nn.Module):
         self.T = params['T']
 
         self.embedding_size = params['item_embedding_dim']
+        self.hidden_size = params['item_embedding_dim'] # params['hidden_size']
         self.dropout_prob = params['dropout_prob']
+        self.num_layers = 1 # params['num_layers']
 
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
         self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
-        self.emb_dropout = nn.Dropout(self.dropout_prob)
-        self.dense = nn.Linear(self.embedding_size, self.embedding_size)
-        self.bn = nn.BatchNorm1d(params['max_seq_len']) # self.embedding_size
+        self.dense = layer.Linear(self.embedding_size, self.embedding_size)
+        self.ln = nn.LayerNorm(self.embedding_size)
 
+        self.gru_layers = nn.GRU(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            bias=False,
+            batch_first=True,
+        )
+
+        functional.set_step_mode(self, 'm')
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
 
@@ -35,19 +45,19 @@ class SNN4Rec(nn.Module):
         return output_tensor.squeeze(1)
 
     def forward(self, item_seq, item_seq_len):
-        item_seq_emb = self.item_embedding(item_seq) 
-        item_seq_emb_dropout = self.emb_dropout(item_seq_emb)
+        B, L = item_seq.shape
+        item_seq_emb = self.item_embedding(item_seq)  # (B, L, D)
+        item_seq_emb = item_seq_emb.unsqueeze(0).repeat(self.T, 1, 1, 1) # -> (T, B, L, D)
+        item_seq_emb = self.ln(item_seq_emb.flatten(0, 1)).reshape(self.T, B, L, -1).contiguous()
+        snn_output = self.lif(item_seq_emb) # (T, B, L, D)
 
-        snn_output = 0.
-        for _ in range(self.T):
-            X_t = item_seq_emb_dropout
-            X_t = self.bn(X_t)
-            snn_output = self.lif(X_t)
+        gru_output, _ = self.gru_layers(snn_output.flatten(0, 1)) # -> (TB, L, D)
+        gru_output = self.dense(gru_output.reshape(self.T, B, L, -1)) # ->(T, B, L, D)
+        gru_output = gru_output.mean(0) # -> (B, L, D)
 
-        snn_output = self.dense(snn_output)
-        seq_output = self.gather_indexes(snn_output, item_seq_len - 1)
+        seq_output = self.gather_indexes(gru_output, item_seq_len - 1)
 
-        return seq_output
+        return seq_output # ->(B, D)
     
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)

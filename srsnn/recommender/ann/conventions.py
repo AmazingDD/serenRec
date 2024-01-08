@@ -5,9 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class BPRMF(nn.Module):
+class MF(nn.Module):
+    ''' MF with BPRloss '''
     def __init__(self, item_num, params):
-        super(BPRMF, self).__init__()
+        super(MF, self).__init__()
         self.n_factors = params['item_embedding_dim']
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu' # cuda:0
@@ -16,6 +17,7 @@ class BPRMF(nn.Module):
 
         self.n_items = item_num + 1 # 多一个0代表空
         self.item_embedding = nn.Embedding(self.n_items, self.n_factors, padding_idx=0) # default embedding for item 0 is all zeros
+        self.ln = nn.LayerNorm(self.n_factors)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
         # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
@@ -27,8 +29,9 @@ class BPRMF(nn.Module):
             torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
             lengths.float().unsqueeze(dim=1) # B -> B,1
         ) # (B, dim)
-        item_embs = self.item_embedding(torch.arange(self.n_items).to(self.device)) # predict for all items, (n_item, dim)
-        scores = torch.matmul(uF, item_embs.transpose(0, 1)) # (B, n_item)
+        uF = self.ln(uF)
+        test_item_emb = self.item_embedding.weight # (n_item, D)
+        scores = torch.matmul(uF, test_item_emb.transpose(0, 1)) # (B, n_item)
 
         return scores
 
