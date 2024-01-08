@@ -6,7 +6,7 @@ import argparse
 import torch
 
 from srsnn.utils import *
-from srsnn.recommender.ann.conventions import MF
+from srsnn.recommender.ann.conventions import MF, Pop
 from srsnn.recommender.snn.conventions import SMF
 from srsnn.recommender.ann.gru4rec import GRU4Rec
 from srsnn.recommender.snn.sgru4rec import SGRU4Rec
@@ -41,7 +41,7 @@ parser.add_argument('-epochs', default=20, type=int, help='The number of trainin
 parser.add_argument('-batch_size', default=128, type=int, help='batch size.')
 parser.add_argument('-wd', '--weight_decay', default=1e-4, type=float, help='weight decay')
 parser.add_argument('-lr', '--learning_rate', default=0.001, type=float, help='learning rate')
-parser.add_argument('-T', default=5, type=int, help='simulating time-steps')
+parser.add_argument('-T', default=4, type=int, help='simulating time-steps')
 parser.add_argument('-tau', default=2., type=float, help='time constant of LIF neuron')
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding dimension for items')
@@ -95,6 +95,8 @@ print(config)
 if config['act'] == 'ann':
     if config['model'] == 'mf':
         model = MF(item_num, config)
+    elif config['model'] == 'pop':
+        model = Pop(item_num, config)
     elif config['model'] == 'gru4rec':
         model = GRU4Rec(item_num, config)
     elif config['model'] == 'sasrec':

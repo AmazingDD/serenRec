@@ -111,4 +111,75 @@ class MF(nn.Module):
         
             last_item = torch.cat((last_item, target), 0)
 
-        return preds, last_item        
+        return preds, last_item 
+
+class Pop(nn.Module):
+    def __init__(self, item_num, params):
+        super().__init__()
+        self.device = params['device'] if torch.cuda.is_available() else 'cpu' 
+
+        self.n_items = item_num + 1
+        self.item_cnt = torch.zeros(self.n_items, 1, dtype=torch.long, device=self.device, requires_grad=False)
+        self.max_cnt = None
+
+    def forward(self, item_seq):
+        pass
+
+    def fit(self, train_loader, valid_loader=None):
+        self.to(self.device)
+
+        start_time = time.time()
+        for data in tqdm(train_loader, desc='Training', unit='batch'):
+            seq = data[0].reshape(-1)
+            seq = seq.to(self.device)
+
+            items = torch.unique(seq)
+            counts = torch.bincount(seq)[items]
+            self.item_cnt[items, :] = self.item_cnt[items, :] + counts.reshape(-1, 1)
+            self.max_cnt = torch.max(self.item_cnt, dim=0)[0]
+
+        train_time = time.time() - start_time
+        print(f'Train Elapse: {train_time:.2f}s')
+
+        if valid_loader is not None:
+            start_time = time.time()
+            preds, last_item = self.predict(valid_loader, [10])
+            pred = preds[10]
+            N, topk = pred.size()
+            expand_target = last_item.unsqueeze(1).expand(-1, topk)
+            hr = (pred == expand_target)
+            ranks = (hr.nonzero(as_tuple=False)[:,-1] + 1).float()
+            mrr = torch.reciprocal(ranks)
+            ndcg = 1 / torch.log2(ranks + 1)
+
+            res_hr = hr.sum(axis=1).float().mean().item()
+            res_mrr = torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item()
+            res_ndcg = torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
+
+            self.best_state_dict = self.state_dict()
+            valid_time = time.time() - start_time
+            print(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
+
+    def predict(self, test_loader, k:list=[10]):
+        preds = {topk : torch.tensor([]) for topk in k}
+        last_item = torch.tensor([])
+
+        for data in test_loader:
+            target = data[1]
+            B = target.shape[0]
+            result = self.item_cnt.to(torch.float64) / self.max_cnt.to(torch.float64)
+            result = torch.repeat_interleave(result.unsqueeze(0), B, dim=0) # (B, item_num, 1)
+            scores = result.squeeze(-1) # -> (B, item_num)
+
+            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1
+
+            for topk in k:
+                preds[topk] = torch.cat((preds[topk], rank_list[:, :topk].cpu()), 0)
+        
+            last_item = torch.cat((last_item, target), 0)
+
+        return preds, last_item 
+
+
+
+
