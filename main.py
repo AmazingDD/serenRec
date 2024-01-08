@@ -14,6 +14,8 @@ from srsnn.recommender.ann.sasrec import SASRec
 from srsnn.recommender.snn.sfsrec import SFSRec
 from srsnn.recommender.ann.caser import Caser
 from srsnn.recommender.snn.scaser import Scaser
+from srsnn.recommender.ann.stamp import STAMP
+from srsnn.recommender.snn.stsamp import STSAMP
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -97,6 +99,8 @@ if config['act'] == 'ann':
         model = SASRec(item_num, config)
     elif config['model'] == 'caser':
         model = Caser(item_num, config)
+    elif config['model'] == 'stamp':
+        model = STAMP(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 elif config['act'] == 'snn':
@@ -108,6 +112,8 @@ elif config['act'] == 'snn':
         model = SFSRec(item_num, config)
     elif config['model'] == 'scaser':
         model = Scaser(item_num, config)
+    elif config['model'] == 'stsamp':
+        model = STSAMP(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 else:
