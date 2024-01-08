@@ -1,4 +1,5 @@
 import time
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -29,16 +30,15 @@ class Scaser(nn.Module):
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
 
         # vertical conv layer
-        self.conv_v = layer.Conv2d(
-            in_channels=1, out_channels=self.n_v, kernel_size=(self.max_seq_length, 1)
-        )
+        self.conv_v = layer.Conv2d(in_channels=1, out_channels=self.n_v, kernel_size=(self.max_seq_length, 1), bias=False)
+        self.conv_v_lif = neuron.LIFNode(tau=params['tau'], detach_reset=True, surrogate_function=surrogate.ATan())
 
         # horizontal conv layer
         lengths = [i + 1 for i in range(self.max_seq_length)]
         self.conv_h = nn.ModuleList(
-            [layer.Conv2d(in_channels=1, out_channels=self.n_h, kernel_size=(i, self.embedding_size)) for i in lengths])
+            [layer.Conv2d(in_channels=1, out_channels=self.n_h, kernel_size=(i, self.embedding_size), bias=False) for i in lengths])
         
-        self.act_conv = nn.ModuleList([neuron.LIFNode(tau=2.0, detach_reset=True, surrogate_function=surrogate.ATan()) for _ in lengths])
+        self.act_conv = nn.ModuleList([neuron.LIFNode(tau=params['tau'], detach_reset=True, surrogate_function=surrogate.ATan()) for _ in lengths])
         
         # fully-connected layer
         self.fc_dim_v = self.n_v * self.embedding_size
@@ -62,6 +62,7 @@ class Scaser(nn.Module):
         if self.n_v:
             out_v = self.conv_v(item_seq_emb) # ->(T, B, nv, 1, D)
             out_v = out_v.reshape(self.T, B, self.fc_dim_v) # -> (T, B, nv*D) prepare for fully connect 
+            out_v = self.conv_v_lif(out_v)
 
         # horizontal conv layer
         out_hs = list()
@@ -105,7 +106,7 @@ class Scaser(nn.Module):
             sample_num = 0
 
             start_time = time.time()
-            for seq, target, _ in train_loader:
+            for seq, target, _ in tqdm(train_loader, desc='Training', unit='batch'):
                 self.optimizer.zero_grad()
                 seq = seq.to(self.device) # (B,max_len)
                 target = target.to(self.device) # (B)

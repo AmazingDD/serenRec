@@ -40,7 +40,7 @@ parser.add_argument('-batch_size', default=128, type=int, help='batch size.')
 parser.add_argument('-wd', '--weight_decay', default=1e-4, type=float, help='weight decay')
 parser.add_argument('-lr', '--learning_rate', default=0.001, type=float, help='learning rate')
 parser.add_argument('-T', default=5, type=int, help='simulating time-steps')
-parser.add_argument('-tau', default=4./3, type=float, help='time constant of LIF neuron')
+parser.add_argument('-tau', default=2., type=float, help='time constant of LIF neuron')
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding dimension for items')
 parser.add_argument('-nl', '--num_layers', default=2, type=int, help='number of certain layers')

@@ -1,6 +1,7 @@
 import time
 import math
 import copy
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -285,7 +286,7 @@ class SASRec(nn.Module):
             sample_num = 0
 
             start_time = time.time()
-            for seq, target, lens in train_loader:
+            for seq, target, lens in tqdm(train_loader, desc='Training', unit='batch'):
                 self.optimizer.zero_grad()
                 seq = seq.to(self.device) # (B,max_len)
                 target = target.to(self.device) # (B)

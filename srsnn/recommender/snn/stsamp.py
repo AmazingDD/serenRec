@@ -5,11 +5,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spikingjelly.activation_based import neuron, surrogate, functional, layer
+from spikingjelly.activation_based import neuron, functional, layer
 
-class SGRU4Rec(nn.Module):
+class STSAMP(nn.Module):
     def __init__(self, item_num, params):
-        super(SGRU4Rec, self).__init__()
+        super(STSAMP, self).__init__()
 
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
@@ -17,48 +17,80 @@ class SGRU4Rec(nn.Module):
         self.wd = params['weight_decay'] 
         self.T = params['T']
 
-        self.embedding_size = params['item_embedding_dim']
-        self.hidden_size = params['item_embedding_dim'] # params['hidden_size']
-        self.dropout_prob = params['dropout_prob']
-        self.num_layers = 1 # params['num_layers']
+        self.embedding_size = params["item_embedding_dim"]
 
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
-        self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
-        self.dense = layer.Linear(self.embedding_size, self.embedding_size)
-        self.ln = nn.LayerNorm(self.embedding_size)
 
-        self.gru_layers = nn.GRU(
-            input_size=self.embedding_size,
-            hidden_size=self.hidden_size,
-            num_layers=self.num_layers,
-            bias=False,
-            batch_first=True,
-        )
+        self.w1 = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+        self.w2 = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+        self.w3 = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+        self.w0 = layer.Linear(self.embedding_size, 1, bias=False)
+
+        self.ln1 = nn.LayerNorm(self.embedding_size)
+        self.ln2 = nn.LayerNorm(self.embedding_size)
+        self.ln3 = nn.LayerNorm(self.embedding_size)
+
+        self.lif1 = neuron.LIFNode(tau=params['tau'], detach_reset=True)
+        self.lif2 = neuron.LIFNode(tau=params['tau'], detach_reset=True)
+        self.lif3 = neuron.LIFNode(tau=params['tau'], detach_reset=True)
+        self.lif0 = neuron.LIFNode(tau=params['tau'], detach_reset=True)
+
+        self.mlp_a = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+        self.mlp_b = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+
+        self.tanh = nn.Tanh()
 
         functional.set_step_mode(self, 'm')
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
 
     def gather_indexes(self, output, gather_index):
-        gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1])
+        gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1]) # (B)->(B, 1, D)
         output_tensor = output.gather(dim=1, index=gather_index)
         return output_tensor.squeeze(1)
-
+    
     def forward(self, item_seq, item_seq_len):
-        B, L = item_seq.shape
-        item_seq_emb = self.item_embedding(item_seq)  # (B, L, D)
-        item_seq_emb = item_seq_emb.unsqueeze(0).repeat(self.T, 1, 1, 1) # -> (T, B, L, D)
-        item_seq_emb = self.ln(item_seq_emb.flatten(0, 1)).reshape(self.T, B, L, -1).contiguous()
-        snn_output = self.lif(item_seq_emb) # (T, B, L, D)
+        item_seq_emb = self.item_embedding(item_seq) 
 
-        gru_output, _ = self.gru_layers(snn_output.flatten(0, 1)) # -> (TB, L, D)
-        gru_output = self.dense(gru_output.reshape(self.T, B, L, -1)) # ->(T, B, L, D)
-        gru_output = gru_output.mean(0) # -> (B, L, D)
+        last_inputs = self.gather_indexes(item_seq_emb, item_seq_len - 1) # (B, D)
+        org_memory = item_seq_emb # (B, L, D)
 
-        seq_output = self.gather_indexes(gru_output, item_seq_len - 1)
+        org_memory = org_memory.unsqueeze(0).repeat(self.T, 1, 1, 1) # -> (T, B, L, D)
+        last_inputs = last_inputs.unsqueeze(0).repeat(self.T, 1, 1) # -> (T, B, D)
 
-        return seq_output # ->(B, D)
+        ms = torch.div(torch.sum(org_memory, dim=2), item_seq_len.unsqueeze(1).float().repeat(self.T, 1, 1)) # (T, B, D)
+
+        alpha = self.count_alpha(org_memory, last_inputs, ms) # (T, B, L)
+
+        vec = torch.matmul(alpha.unsqueeze(2), org_memory) # (T, B, 1, L) * (T, B, L, D) -> (T, B, 1, D)
+        ma = vec.squeeze(2) + ms # ->(T, B, D)
+        hs = self.tanh(self.mlp_a(ma))
+        ht = self.tanh(self.mlp_b(last_inputs))
+        seq_output = hs * ht # (T, B, D)
+        return seq_output.mean(0) # (B, D)
+    
+    def count_alpha(self, context, aspect, output):
+        ''' count the attention weights '''
+        T, B, L, D = context.shape
+
+        aspect_4dim = aspect.repeat(1, 1, L).reshape(T, B, L, D)
+        output_4dim = output.repeat(1, 1, L).reshape(T, B, L, D)
+        
+        # all (T, B, L, D)
+        res_ctx = self.w1(context) 
+        res_asp = self.w2(aspect_4dim)
+        res_output = self.w3(output_4dim)
+
+        K = self.lif1(self.ln1(res_ctx.flatten(0, 1)).reshape(T, B, L, D).contiguous())
+        Q = self.lif2(self.ln2(res_asp.flatten(0, 1)).reshape(T, B, L, D).contiguous())
+        V = self.lif3(self.ln3(res_output.flatten(0, 1)).reshape(T, B, L, D).contiguous())
+
+        res_sum = K + Q + V # (T, B, L, D)
+        res_act = self.w0(res_sum)  # ->(T, B, L, 1)
+        alpha = res_act.squeeze(3) # -> (T, B, L)
+        spike_alpha = self.lif0(alpha) 
+
+        return spike_alpha # (T, B, L)
     
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
@@ -90,8 +122,6 @@ class SGRU4Rec(nn.Module):
                 sample_num += target.numel()
 
                 functional.reset_net(self)
-
-            self.scheduler.step()
 
             train_time = time.time() - start_time
             print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
@@ -142,4 +172,3 @@ class SGRU4Rec(nn.Module):
             functional.reset_net(self)
 
         return preds, last_item
-

@@ -1,4 +1,5 @@
 import time
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -37,12 +38,13 @@ class STAMP(nn.Module):
         return output_tensor.squeeze(1)
 
     def forward(self, item_seq, item_seq_len):
-        item_seq_emb = self.item_embedding(item_seq)
+        item_seq_emb = self.item_embedding(item_seq) 
 
-        last_inputs = self.gather_indexes(item_seq_emb, item_seq_len - 1)
-        org_memory = item_seq_emb
+        last_inputs = self.gather_indexes(item_seq_emb, item_seq_len - 1) # (B, D)
+        org_memory = item_seq_emb # (B, L, D)
 
-        ms = torch.div(torch.sum(org_memory, dim=1), item_seq_len.unsqueeze(1).float())
+        ms = torch.div(torch.sum(org_memory, dim=1), item_seq_len.unsqueeze(1).float()) # (B, D)
+
         alpha = self.count_alpha(org_memory, last_inputs, ms)
         vec = torch.matmul(alpha.unsqueeze(1), org_memory)
         ma = vec.squeeze(1) + ms
@@ -53,13 +55,14 @@ class STAMP(nn.Module):
     
     def count_alpha(self, context, aspect, output):
         ''' count the attention weights '''
-        timesteps = context.size(1)
+        timesteps = context.size(1) # L
         aspect_3dim = aspect.repeat(1, timesteps).view(
             -1, timesteps, self.embedding_size
-        )
+        ) # (B, D)->(B, L, D)
         output_3dim = output.repeat(1, timesteps).view(
             -1, timesteps, self.embedding_size
-        )
+        ) # (B, D)->(B, L, D)
+        
         res_ctx = self.w1(context)
         res_asp = self.w2(aspect_3dim)
         res_output = self.w3(output_3dim)
@@ -80,7 +83,7 @@ class STAMP(nn.Module):
             sample_num = 0
 
             start_time = time.time()
-            for seq, target, lens in train_loader:
+            for seq, target, lens in tqdm(train_loader, desc='Training', unit='batch'):
                 self.optimizer.zero_grad()
                 seq = seq.to(self.device) # (B,max_len)
                 target = target.to(self.device) # (B)
