@@ -25,10 +25,9 @@ class MF(nn.Module):
         item_seq_emb = self.item_embedding(seq)
 
         uF = torch.div(
-            torch.sum(item_seq_emb, dim=1), # (B,max_len,dim) -> (B,dim)
+            torch.sum(self.ln(item_seq_emb), dim=1), # (B,max_len,dim) -> (B,dim)
             lengths.float().unsqueeze(dim=1) # B -> B,1
         ) # (B, dim)
-        uF = self.ln(uF)
         test_item_emb = self.item_embedding.weight # (n_item, D)
         scores = torch.matmul(uF, test_item_emb.transpose(0, 1)) # (B, n_item)
 

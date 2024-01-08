@@ -29,13 +29,12 @@ class SMF(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
                 
     def forward(self, seq, lengths):
-        item_seq_emb = self.item_embedding(seq)
-        uF = torch.div(
-            torch.sum(item_seq_emb, dim=1),
-            lengths.float().unsqueeze(dim=1)
-        ) # (B, D)
-        uF = self.ln(uF) # (B, D)
-        uF = uF.unsqueeze(0).repeat(self.T, 1, 1)
+        item_seq_emb = self.item_embedding(seq) # (B, L, D)
+        B, L, D = item_seq_emb.shape
+        item_seq_emb = item_seq_emb.unsqueeze(0).repeat(self.T, 1, 1, 1) # (T, B, L, D)
+        
+        uF = torch.sum(self.ln(item_seq_emb.flatten(0, 1)).reshape(self.T, B, L, D), dim=2) # (T, B, D)
+        uF = torch.div(uF, lengths.float().unsqueeze(1).repeat(self.T, 1, 1))  
         uF = self.lif(uF) # (T, B, D)
         uF = uF.mean(0) # (B, D)
 
