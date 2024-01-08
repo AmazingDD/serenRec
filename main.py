@@ -16,6 +16,8 @@ from srsnn.recommender.ann.caser import Caser
 from srsnn.recommender.snn.scaser import Scaser
 from srsnn.recommender.ann.stamp import STAMP
 from srsnn.recommender.snn.stsamp import STSAMP
+from srsnn.recommender.ann.srgnn import SRGNN
+from srsnn.recommender.snn.srsgnn import SRSGNN
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -101,6 +103,8 @@ if config['act'] == 'ann':
         model = Caser(item_num, config)
     elif config['model'] == 'stamp':
         model = STAMP(item_num, config)
+    elif config['model'] == 'srgnn':
+        model = STAMP(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 elif config['act'] == 'snn':
@@ -113,6 +117,8 @@ elif config['act'] == 'snn':
     elif config['model'] == 'scaser':
         model = Scaser(item_num, config)
     elif config['model'] == 'stsamp':
+        model = STSAMP(item_num, config)
+    elif config['model'] == 'srsgnn':
         model = STSAMP(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')

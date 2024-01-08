@@ -111,4 +111,4 @@ class MF(nn.Module):
         
             last_item = torch.cat((last_item, target), 0)
 
-        return preds, last_item
+        return preds, last_item        
