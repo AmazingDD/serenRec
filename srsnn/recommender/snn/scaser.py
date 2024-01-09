@@ -31,7 +31,7 @@ class Scaser(nn.Module):
 
         # vertical conv layer
         self.conv_v = layer.Conv2d(in_channels=1, out_channels=self.n_v, kernel_size=(self.max_seq_length, 1), bias=False)
-        self.conv_v_lif = neuron.LIFNode(tau=params['tau'], detach_reset=True, surrogate_function=surrogate.ATan())
+        # self.conv_v_lif = neuron.LIFNode(tau=params['tau'], detach_reset=True, surrogate_function=surrogate.ATan())
 
         # horizontal conv layer
         lengths = [i + 1 for i in range(self.max_seq_length)]
@@ -62,7 +62,7 @@ class Scaser(nn.Module):
         if self.n_v:
             out_v = self.conv_v(item_seq_emb) # ->(T, B, nv, 1, D)
             out_v = out_v.reshape(self.T, B, self.fc_dim_v) # -> (T, B, nv*D) prepare for fully connect 
-            out_v = self.conv_v_lif(out_v)
+            # out_v = self.conv_v_lif(out_v)
 
         # horizontal conv layer
         out_hs = list()
