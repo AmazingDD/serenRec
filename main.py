@@ -46,6 +46,7 @@ parser.add_argument('-tau', default=2., type=float, help='time constant of LIF n
 # alogo specific settings
 parser.add_argument('-item_embedding_dim', default=64, type=int, help='embedding dimension for items')
 parser.add_argument('-nl', '--num_layers', default=2, type=int, help='number of certain layers')
+parser.add_argument('-step', default=1, type=int, help='number of step for GNN')
 parser.add_argument('-nh', '--num_heads', default=2, type=int, help='number of heads for attention mechanism')
 parser.add_argument('-dp', '--dropout_prob', default=0.3, type=float, help='probability for dropout layer')
 parser.add_argument('-reg', '--reg_weight', default=1e-4, type=float, help='regularization weight.')
