@@ -81,6 +81,8 @@ class SRGNN(nn.Module):
         self.linear_three = nn.Linear(self.embedding_size, 1, bias=False)
         self.linear_transform = nn.Linear(self.embedding_size * 2, self.embedding_size, bias=True)
 
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
+
     def _get_slice(self, item_seq):
         mask = item_seq.gt(0)  # greater than zero means true items
         items, n_node, A, alias_inputs = [], [], [], []

@@ -107,7 +107,7 @@ if config['act'] == 'ann':
     elif config['model'] == 'stamp':
         model = STAMP(item_num, config)
     elif config['model'] == 'srgnn':
-        model = STAMP(item_num, config)
+        model = SRGNN(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 elif config['act'] == 'snn':
@@ -122,7 +122,7 @@ elif config['act'] == 'snn':
     elif config['model'] == 'stsamp':
         model = STSAMP(item_num, config)
     elif config['model'] == 'srsgnn':
-        model = STSAMP(item_num, config)
+        model = SRSGNN(item_num, config)
     else:
         raise ValueError(f'Invalid model name: {config["model"]}')
 else:
