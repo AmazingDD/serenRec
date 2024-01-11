@@ -1,4 +1,5 @@
 import time
+import math
 from tqdm import tqdm
 import numpy as np
 
@@ -83,6 +84,14 @@ class SRGNN(nn.Module):
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
 
+        # parameters initialization
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.embedding_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, stdv)
+
     def _get_slice(self, item_seq):
         mask = item_seq.gt(0)  # greater than zero means true items
         items, n_node, A, alias_inputs = [], [], [], []
@@ -136,11 +145,11 @@ class SRGNN(nn.Module):
         # fetch the last hidden state of last timestamp
         ht = self.gather_indexes(seq_hidden, item_seq_len - 1) # (B, D)
         q1 = self.linear_one(ht).unsqueeze(1) # -> (B, 1, D)
-        q2 = self.linear_two(seq_hidden) # -> (B, 1, D) 
+        q2 = self.linear_two(seq_hidden) # -> (B, L, D) 
 
         # attention
-        alpha = self.linear_three(torch.sigmoid(q1 + q2)) # (B, 1, 1)
-        a = torch.sum(alpha * seq_hidden * mask.unsqueeze(2).float(), 1) # (B, 1, 1) * (B, L, D) * (B, L, 1)->(B, L, D)->(B, D)
+        alpha = self.linear_three(torch.sigmoid(q1 + q2)) # (B, L, 1)
+        a = torch.sum(alpha * seq_hidden * mask.unsqueeze(2).float(), 1) # (B, L, 1) * (B, L, D) * (B, L, 1)->(B, L, D)->(B, D)
         
         seq_output = self.linear_transform(torch.cat([a, ht], dim=1)) # (B, 2D) ->(B, D)
 
