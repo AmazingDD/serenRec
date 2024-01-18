@@ -161,4 +161,4 @@ cython_debug/
 
 movielens/
 dataset/
-srsnn/recommender/snn/
+seren/recommender/snn/

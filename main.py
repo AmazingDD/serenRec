@@ -5,19 +5,13 @@ import argparse
 
 import torch
 
-from srsnn.utils import *
-from srsnn.recommender.ann.conventions import MF, Pop
-from srsnn.recommender.snn.conventions import SMF
-from srsnn.recommender.ann.gru4rec import GRU4Rec
-from srsnn.recommender.snn.sgru4rec import SGRU4Rec
-from srsnn.recommender.ann.sasrec import SASRec
-from srsnn.recommender.snn.sfsrec import SFSRec
-from srsnn.recommender.ann.caser import Caser
-from srsnn.recommender.snn.scaser import Scaser
-from srsnn.recommender.ann.stamp import STAMP
-from srsnn.recommender.snn.stsamp import STSAMP
-from srsnn.recommender.ann.srgnn import SRGNN
-from srsnn.recommender.snn.srsgnn import SRSGNN
+from seren.utils import *
+from seren.recommender.caser import Caser
+from seren.recommender.stamp import STAMP
+from seren.recommender.srgnn import SRGNN
+from seren.recommender.sasrec import SASRec
+from seren.recommender.gru4rec import GRU4Rec
+from seren.recommender.conventions import MF, Pop
 
 config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
 
@@ -93,40 +87,22 @@ train_dataloader = get_dataloader(train_dataset, batch_size=config['batch_size']
 test_dataloader = get_dataloader(test_dataset, batch_size=config['batch_size'], shuffle=False, num_workers=config['worker'])
 
 print(config)
-if config['act'] == 'ann':
-    if config['model'] == 'mf':
-        model = MF(item_num, config)
-    elif config['model'] == 'pop':
-        model = Pop(item_num, config)
-    elif config['model'] == 'gru4rec':
-        model = GRU4Rec(item_num, config)
-    elif config['model'] == 'sasrec':
-        model = SASRec(item_num, config)
-    elif config['model'] == 'caser':
-        model = Caser(item_num, config)
-    elif config['model'] == 'stamp':
-        model = STAMP(item_num, config)
-    elif config['model'] == 'srgnn':
-        model = SRGNN(item_num, config)
-    else:
-        raise ValueError(f'Invalid model name: {config["model"]}')
-elif config['act'] == 'snn':
-    if config['model'] == 'mf':
-        model = SMF(item_num, config)
-    elif config['model'] == 'sgru4rec':
-        model = SGRU4Rec(item_num, config)
-    elif config['model'] == 'sfsrec':
-        model = SFSRec(item_num, config)
-    elif config['model'] == 'scaser':
-        model = Scaser(item_num, config)
-    elif config['model'] == 'stsamp':
-        model = STSAMP(item_num, config)
-    elif config['model'] == 'srsgnn':
-        model = SRSGNN(item_num, config)
-    else:
-        raise ValueError(f'Invalid model name: {config["model"]}')
+if config['model'] == 'mf':
+    model = MF(item_num, config)
+elif config['model'] == 'pop':
+    model = Pop(item_num, config)
+elif config['model'] == 'gru4rec':
+    model = GRU4Rec(item_num, config)
+elif config['model'] == 'sasrec':
+    model = SASRec(item_num, config)
+elif config['model'] == 'caser':
+    model = Caser(item_num, config)
+elif config['model'] == 'stamp':
+    model = STAMP(item_num, config)
+elif config['model'] == 'srgnn':
+    model = SRGNN(item_num, config)
 else:
-    raise ValueError(f'Invalid activation name: {config["act"]}')
+    raise ValueError(f'Invalid model name: {config["model"]}')
 
 print('Start training...')
 model.fit(train_dataloader, test_dataloader)

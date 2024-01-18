@@ -1,14 +1,19 @@
-# SR-SNN
-This is the repository of our article published in xxxx 2025 "SR-SNN: When Spiking Neural Network Meets On-device Session-based Recommendation"
+<p align="left">
+<img src="seren/logo.jpg" align="center" width="60%" style="margin: 0 auto">
+</p>
 
-## TODO list
+## Overview
 
- - [x] 基础算法框架搭建
- - [ ] GNN在ml-1m的探索实验
- - [ ] 数据集确定
- - [ ] Accuracy(HR, MRR, NDCG) Baseline Table, topk=5, 10, 15, 20
- - [ ] impact of sequence length (SR-GNN, SASRec)
- - [ ] impact of time step (SR-GNN, SASRec)
- - [ ] on-device的方法实践(也要选几个代表)，discussion with Du. /Jiang.
- - [ ] a new energy consumption calculation method, sumulator or ?
- - [ ] 一些围绕spike的相关解释性讨论
+serenRec is a python toolkit developed for sequential-/session-based recommendation baselines and experiments.
+
+## Implemented Algorithms
+
+| **Model** | **Publication** |
+|-----------|-----------------|
+| Session-Pop | A re-visit of the popularity baseline in recommender systems |
+| Session-MF | Matrix factorization techniques for recommender systems |
+| Caser | Personalized Top-N Sequential Recommendation via Convolutional Sequence Embedding |
+| SASRec | Self-Attentive Sequential Recommendation. |
+| SRGNN | Session-based Recommendation with Graph Neural Networks |
+| STAMP | STAMP: Short-Term Attention/Memory Priority Model for Session-based Recommendation |
+| GRU4Rec | Improved Recurrent Neural Networks for Session-based Recommendations |
