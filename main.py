@@ -25,7 +25,7 @@ parser.add_argument('-worker', default=4, type=int, help='number of workers for 
 parser.add_argument('-shuffle', action='store_false', help='Whether or not to shuffle the training data before each epoch.')
 # Training Settings
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')
-parser.add_argument('-act', default='ann', help='algo type name')
+# parser.add_argument('-act', default='ann', help='algo type name')
 parser.add_argument('-model', default='mf', help='algo name')
 parser.add_argument('-prepro', default='5core', help='preprocessing method for dataset') # raw TODO
 parser.add_argument('-len', '--max_seq_len', default=20, type=int, help='max sequence length')
