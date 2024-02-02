@@ -1,11 +1,21 @@
 import re
 import os
+import datetime
 import numpy as np
 import pandas as pd
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+def get_local_time():
+    cur = datetime.datetime.now()
+    cur = cur.strftime('%b-%d-%Y_%H-%M-%S')
+
+    return cur
 
 class Interactions(object):
     def __init__(self, config, encoding=True) -> None:

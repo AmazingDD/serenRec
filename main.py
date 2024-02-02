@@ -13,7 +13,9 @@ from seren.recommender.sasrec import SASRec
 from seren.recommender.gru4rec import GRU4Rec
 from seren.recommender.conventions import MF, Pop
 
-config = yaml.safe_load(open('./srsnn/config/basic.yaml', 'r'))
+# python main.py -use_cuda -gpu_id=6 model=gru4rec
+
+config = yaml.safe_load(open('./seren/config/basic.yaml', 'r'))
 
 parser = argparse.ArgumentParser(description='SNN for sequential recommendation experiments')
 
@@ -27,7 +29,7 @@ parser.add_argument('-shuffle', action='store_false', help='Whether or not to sh
 parser.add_argument('-dataset', default='ml-1m', help='dataset name')
 # parser.add_argument('-act', default='ann', help='algo type name')
 parser.add_argument('-model', default='mf', help='algo name')
-parser.add_argument('-prepro', default='5core', help='preprocessing method for dataset') # raw TODO
+parser.add_argument('-prepro', default='raw', help='preprocessing method for dataset') # raw TODO
 parser.add_argument('-len', '--max_seq_len', default=20, type=int, help='max sequence length')
 parser.add_argument('-test_ratio', default=0.2, type=float, help='test ratio for fold-out split')
 parser.add_argument('-split_method', default='ufo', type=str, help='method for train-test split')
@@ -107,6 +109,10 @@ else:
 print('Start training...')
 model.fit(train_dataloader, test_dataloader)
 print('Finish training')
+
+# save state
+ensure_dir(config['checkpoint_dir'])
+torch.save(model.best_state_dict, os.path.join(config['checkpoint_dir'], f"{config['dataset']}_{config['prepro']}_{config['model']}_chkpt.pt"))
 
 print('Reloading model with the best parameters for prediction performace')
 model.load_state_dict(model.best_state_dict)
