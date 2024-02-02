@@ -161,4 +161,6 @@ cython_debug/
 
 movielens/
 dataset/
+saved/
 seren/recommender/snn/
+tsne.py
