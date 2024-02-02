@@ -74,6 +74,8 @@ else:
     inters = Interactions(config)
     inters.build()
 
+    torch.save(inters, os.path.join(dataset_dir, f'inters_{config["prepro"]}.pt'))
+
     train_dataset = SequentialDataset(inters.train_data)
     test_dataset = SequentialDataset(inters.test_data)
     item_num = inters.item_num
