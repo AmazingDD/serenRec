@@ -23,8 +23,8 @@ python main.py -use_cuda -gpu_id=0 -model=sasrec
 | SRGNN | Session-based Recommendation with Graph Neural Networks |
 | STAMP | STAMP: Short-Term Attention/Memory Priority Model for Session-based Recommendation |
 | GRU4Rec | Improved Recurrent Neural Networks for Session-based Recommendations |
+| FMLP | Filter-enhanced MLP is All You Need for Sequential Recommendation |
 
 ## TODO List
 
 - [ ] More baselines
-- [ ] find some long-tail baselines for further research
