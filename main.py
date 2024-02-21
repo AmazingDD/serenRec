@@ -6,6 +6,7 @@ import argparse
 import torch
 
 from seren.utils import *
+from seren.recommender.fmlp import FMLP
 from seren.recommender.caser import Caser
 from seren.recommender.stamp import STAMP
 from seren.recommender.srgnn import SRGNN
@@ -105,6 +106,8 @@ elif config['model'] == 'stamp':
     model = STAMP(item_num, config)
 elif config['model'] == 'srgnn':
     model = SRGNN(item_num, config)
+elif config['model'] == 'fmlp':
+    model = FMLP(item_num, config)
 else:
     raise ValueError(f'Invalid model name: {config["model"]}')
 

@@ -27,4 +27,6 @@ python main.py -use_cuda -gpu_id=0 -model=sasrec
 
 ## TODO List
 
-- [ ] More baselines
+- [x] More baselines
+- [ ] interface for more datasets
+<!-- - [ ] find some long tail baselines -->
