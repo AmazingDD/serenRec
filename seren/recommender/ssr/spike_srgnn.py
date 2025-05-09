@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from spikingjelly.activation_based import neuron, functional, layer, surrogate
+
 class GNN(nn.Module):
     def __init__(self, embedding_size, step=1):
         super(GNN, self).__init__()
@@ -60,11 +62,11 @@ class GNN(nn.Module):
         # step for gated mechanism
         for _ in range(self.step):
             hidden = self.GNNCell(A, hidden)
-        return hidden
+        return hidden    
 
-class SRGNN(nn.Module):
+class SRSGNN(nn.Module):
     def __init__(self, item_num, params):
-        super(SRGNN, self).__init__()
+        super(SRSGNN, self).__init__()
         self.logger = params['logger']
         self.embedding_size = params["item_embedding_dim"]
         self.step = params["step"]
@@ -72,17 +74,26 @@ class SRGNN(nn.Module):
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
         self.lr = params['learning_rate'] 
         self.wd = params['weight_decay'] 
+        self.T = params['T']
 
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
 
         # define layers and loss
         self.gnn = GNN(self.embedding_size, self.step)
-        self.linear_one = nn.Linear(self.embedding_size, self.embedding_size, bias=True)
-        self.linear_two = nn.Linear(self.embedding_size, self.embedding_size, bias=True)
-        self.linear_three = nn.Linear(self.embedding_size, 1, bias=False)
-        self.linear_transform = nn.Linear(self.embedding_size * 2, self.embedding_size, bias=True)
+        
+        self.seq_lif = neuron.LIFNode(tau=params['tau'], detach_reset=True)
+        
+        self.linear_one = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+        self.linear_two = layer.Linear(self.embedding_size, self.embedding_size, bias=False)
+        self.linear_three = layer.Linear(self.embedding_size, 1, bias=False)
+        self.linear_transform = layer.Linear(self.embedding_size * 2, self.embedding_size, bias=False)
 
+        self.surrogate_func_q = surrogate.ATan()
+        
+        self.ln_seq = nn.LayerNorm(self.embedding_size)
+        
+        functional.set_step_mode(self, 'm')
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
 
         # parameters initialization
@@ -139,22 +150,30 @@ class SRGNN(nn.Module):
         alias_inputs, A, items, mask = self._get_slice(item_seq)
         hidden = self.item_embedding(items) # (B, L, D)
         hidden = self.gnn(A, hidden)  # (B, L, D)
-
-        alias_inputs = alias_inputs.unsqueeze(2).expand(-1, -1, self.embedding_size) # ->(B, L, 1) -> (B, L, D)
-        seq_hidden = torch.gather(hidden, dim=1, index=alias_inputs) # (B, L, D) select hidden representation as the actual order
-
-        # fetch the last hidden state of last timestamp
-        ht = self.gather_indexes(seq_hidden, item_seq_len - 1) # (B, D)
-        q1 = self.linear_one(ht).unsqueeze(1) # -> (B, 1, D)
-        q2 = self.linear_two(seq_hidden) # -> (B, L, D) 
-
-        # attention
-        alpha = self.linear_three(torch.sigmoid(q1 + q2)) # (B, L, 1)
-        a = torch.sum(alpha * seq_hidden * mask.unsqueeze(2).float(), 1) # (B, L, 1) * (B, L, D) * (B, L, 1)->(B, L, D)->(B, D)
         
-        seq_output = self.linear_transform(torch.cat([a, ht], dim=1)) # (B, 2D) ->(B, D)
+        alias_inputs = alias_inputs.unsqueeze(2).expand(-1, -1, self.embedding_size) # ->(B, L, 1) -> (B, L, D)
+        seq_hidden = torch.gather(hidden, dim=1, index=alias_inputs) # (B, L, D) 
+        B, L, D = seq_hidden.shape
+        
+        seq_hidden = self.ln_seq(seq_hidden).contiguous()
+        mask_seq_hidden = seq_hidden * mask.unsqueeze(2).float()
+        seq_hidden = seq_hidden.unsqueeze(0).repeat(self.T, 1, 1, 1) # (T, B, L, D) global embedding
+        seq_hidden = self.seq_lif(seq_hidden)
 
-        return seq_output
+        s1 = self.gather_indexes(seq_hidden.flatten(0, 1), 
+                                 item_seq_len.unsqueeze(0).repeat(self.T, 1).flatten(0, 1) - 1) # (TB, D) 
+        s1 = s1.reshape(self.T, B, D).contiguous()
+        
+        # soft attention mechanism
+        # -> (T, B, 1, D) + (T, B, L, D) -> (T, B, L, D)
+        Q = self.surrogate_func_q(self.linear_one(s1).unsqueeze(2) + self.linear_two(seq_hidden))
+        alpha = self.linear_three(Q) # (T, B, L, 1)
+        a = torch.sum(alpha * mask_seq_hidden, 2) # (T, B, L, 1) * (T, B, L, D))->(T, B, L, D)->(T, B, D)
+
+        sh = torch.cat([a, s1], dim=2) # (T, B, 2D)
+        seq_output = self.linear_transform(sh) #  ->(T, B, D)
+
+        return seq_output.mean(0) # (B, D)
     
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
@@ -184,6 +203,8 @@ class SRGNN(nn.Module):
 
                 total_loss += loss.item()
                 sample_num += target.numel()
+
+                functional.reset_net(self)
 
             train_time = time.time() - start_time
             self.logger.info(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
@@ -223,6 +244,8 @@ class SRGNN(nn.Module):
         
             last_item = torch.cat((last_item, target), 0)
 
+            functional.reset_net(self)
+
         return preds, last_item
     
     def evaluate(self, test_loader, k:list=[10]):
@@ -258,8 +281,8 @@ class SRGNN(nn.Module):
                 res[topk]['MRR'] += res_mrr
                 res[topk]['NDCG'] += res_ndcg
                 res[topk]['HR'] += res_hr
+            functional.reset_net(self)
 
         for topk in k:
             res[topk] = {kpi: r / batch_cnt for kpi, r in res[topk].items()}
         return res
-    

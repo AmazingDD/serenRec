@@ -1,41 +1,12 @@
 import time
-import math
 import copy
-from copy import deepcopy
 from tqdm import tqdm
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class GeLu(nn.Module):
-    def __init__(self):
-        super(GeLu, self).__init__()
-
-    def forward(self, x):
-        return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
-    
-class Swish(nn.Module):
-    def __init__(self):
-        super(Swish, self).__init__()
-
-    def forward(self, x):
-        return x * torch.sigmoid(x)
-
-ACT2FN = {"gelu": GeLu(), "relu": nn.ReLU(), "swish": Swish()}
-
-class LayerNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-12):
-        super(LayerNorm, self).__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.bias = nn.Parameter(torch.zeros(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, x):
-        u = x.mean(-1, keepdim=True)
-        s = (x - u).pow(2).mean(-1, keepdim=True)
-        x = (x - u) / torch.sqrt(s + self.variance_epsilon)
-        return self.weight * x + self.bias
+from spikingjelly.activation_based import surrogate, neuron, functional, layer
     
 class FilterLayer(nn.Module):
     def __init__(self, max_seq_length, hidden_size, hidden_dropout_prob=0.5):
@@ -44,50 +15,61 @@ class FilterLayer(nn.Module):
             torch.randn(1, max_seq_length // 2 + 1, hidden_size, 2, dtype=torch.float32) * 0.02
         )
         self.out_dropout = nn.Dropout(hidden_dropout_prob)
-        self.layernorm = LayerNorm(hidden_size, eps=1e-12)
 
+        self.bn = nn.BatchNorm1d(hidden_size)
 
     def forward(self, input_tensor):
         # [batch, seq_len, hidden]
-        #sequence_emb_fft = torch.rfft(input_tensor, 2, onesided=False)  # [:, :, :, 0]
-        #sequence_emb_fft = torch.fft(sequence_emb_fft.transpose(1, 2), 2)[:, :, :, 0].transpose(1, 2)
+
         batch, seq_len, hidden = input_tensor.shape
         x = torch.fft.rfft(input_tensor, dim=1, norm='ortho')
         weight = torch.view_as_complex(self.complex_weight)
         x = x * weight
         sequence_emb_fft = torch.fft.irfft(x, n=seq_len, dim=1, norm='ortho')
         hidden_states = self.out_dropout(sequence_emb_fft)
-        hidden_states = self.layernorm(hidden_states + input_tensor)
 
+        hidden_states = hidden_states + input_tensor
+        hidden_states = self.bn(hidden_states.transpose(-1, -2)).transpose(-1, -2)
         return hidden_states
 
 class Intermediate(nn.Module):
-    def __init__(self, hidden_size, hidden_act='gelu', hidden_dropout_prob=0.5):
+    def __init__(self, hidden_size, hidden_dropout_prob=0.5, T=4):
         super(Intermediate, self).__init__()
+        self.T = T
         self.dense_1 = nn.Linear(hidden_size, hidden_size * 4)
-        assert isinstance(hidden_act, str), 'invalid hidden acivation'
-        self.intermediate_act_fn = ACT2FN[hidden_act]
 
+        self.bn_1 = nn.BatchNorm1d(hidden_size * 4)
+        self.intermediate_act_lif = neuron.LIFNode(tau=2.0, detach_reset=True, surrogate_function=surrogate.ATan())
+        
+        self.dense_2 = layer.Linear(4 * hidden_size, hidden_size)
+        self.dropout = layer.Dropout(hidden_dropout_prob)
+        self.bn_2 = layer.BatchNorm1d(hidden_size)
 
-        self.dense_2 = nn.Linear(4 * hidden_size, hidden_size)
-        self.layernorm = LayerNorm(hidden_size, eps=1e-12)
-        self.dropout = nn.Dropout(hidden_dropout_prob)
+        self.last_lif = neuron.LIFNode(tau=2.0, detach_reset=True, surrogate_function=surrogate.ATan())
+        
+        self.last_bn = nn.BatchNorm1d(hidden_size)
 
     def forward(self, input_tensor):
-        hidden_states = self.dense_1(input_tensor)
-        hidden_states = self.intermediate_act_fn(hidden_states)
+        hidden_states = self.dense_1(input_tensor)  # float mac, T,B,L,C B = 1, T*T
+        hidden_states = self.bn_1(hidden_states.transpose(-1, -2)).transpose(-1, -2)
+        hidden_states = hidden_states.unsqueeze(0).repeat(self.T, 1, 1, 1)
+        hidden_states = self.intermediate_act_lif(hidden_states)
 
-        hidden_states = self.dense_2(hidden_states)
+        hidden_states = self.dense_2(hidden_states)  # ac, W*x
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.layernorm(hidden_states + input_tensor)
-
+        hidden_states = hidden_states + input_tensor.unsqueeze(0).repeat(self.T, 1, 1, 1)
+        hidden_states = self.bn_2(hidden_states.transpose(-1, -2)).transpose(-1, -2)
+        hidden_states = self.last_lif(hidden_states)
+        hidden_states = hidden_states.mean(0)
+        hidden_states = self.last_bn(hidden_states.transpose(-1, -2)).transpose(-1, -2)
+        
         return hidden_states
 
 class Layer(nn.Module):
-    def __init__(self, max_seq_length, hidden_size, hidden_dropout_prob, hidden_act):
+    def __init__(self, max_seq_length, hidden_size, hidden_dropout_prob, T):
         super(Layer, self).__init__()
         self.filterlayer = FilterLayer(max_seq_length, hidden_size, hidden_dropout_prob)
-        self.intermediate = Intermediate(hidden_size, hidden_act, hidden_dropout_prob)
+        self.intermediate = Intermediate(hidden_size, hidden_dropout_prob, T)
 
     def forward(self, hidden_states):
 
@@ -97,9 +79,9 @@ class Layer(nn.Module):
         return intermediate_output
 
 class Encoder(nn.Module):
-    def __init__(self, n_layers, max_seq_length, hidden_size, hidden_dropout_prob, hidden_act):
+    def __init__(self, n_layers, max_seq_length, hidden_size, hidden_dropout_prob, T):
         super(Encoder, self).__init__()
-        layer = Layer(max_seq_length, hidden_size, hidden_dropout_prob, hidden_act)
+        layer = Layer(max_seq_length, hidden_size, hidden_dropout_prob, T)
         self.layer = nn.ModuleList([copy.deepcopy(layer)
                                     for _ in range(n_layers)])
 
@@ -113,14 +95,15 @@ class Encoder(nn.Module):
             all_encoder_layers.append(hidden_states)
         return all_encoder_layers
 
-class FMLP(nn.Module):
+class SSR(nn.Module):
     def __init__(self, item_num, params):
-        super(FMLP, self).__init__()
+        super(SSR, self).__init__()
         self.logger = params['logger']
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
         self.lr = params['learning_rate'] 
         self.wd = params['weight_decay'] 
+        self.T = params['T']
 
         self.n_layers = params['num_layers'] # 2
         self.hidden_size = params['item_embedding_dim'] # 64
@@ -131,7 +114,7 @@ class FMLP(nn.Module):
         self.item_embedding = nn.Embedding(self.n_items, self.hidden_size, padding_idx=0)
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size)
 
-        self.layernorm = LayerNorm(self.hidden_size, eps=1e-12)
+        self.bn = nn.BatchNorm1d(self.hidden_size)
         self.dropout = nn.Dropout(self.hidden_dropout_prob)
 
         self.item_encoder = Encoder(
@@ -139,17 +122,19 @@ class FMLP(nn.Module):
             max_seq_length=self.max_seq_length,
             hidden_size=self.hidden_size,
             hidden_dropout_prob=self.hidden_dropout_prob, 
-            hidden_act='gelu', # relu
+            T = self.T
         )
-
+        
+        functional.set_step_mode(self, 'm')
         self.apply(self.init_weights)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
 
     def init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             module.weight.data.normal_(mean=0.0, std=0.02)
-        elif isinstance(module, LayerNorm):
+        elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
         if isinstance(module, nn.Linear) and module.bias is not None:
@@ -167,20 +152,21 @@ class FMLP(nn.Module):
         item_embeddings = self.item_embedding(sequence) # [B, L, D]
         position_embeddings = self.position_embedding(position_ids) # [B, L, D]
         sequence_emb = item_embeddings + position_embeddings
-        sequence_emb = self.layernorm(sequence_emb)
+        sequence_emb = self.bn(sequence_emb.transpose(-1,-2)).transpose(-1,-2)
         sequence_emb = self.dropout(sequence_emb)
-
         return sequence_emb
     
     def forward(self, item_seq, item_seq_len):
         sequence_emb = self.add_position_embedding(item_seq) # [B, L, D]
+
         item_encoded_layers = self.item_encoder(
             sequence_emb,
-            output_all_encoded_layers=True)
+            output_all_encoded_layers=True
+        )
         
-        output = item_encoded_layers[-1]
+        output = item_encoded_layers[-1] # [B, L, D]
+        
         output = self.gather_indexes(output, item_seq_len - 1)
-
         return output
 
     def fit(self, train_loader, valid_loader=None):
@@ -197,7 +183,7 @@ class FMLP(nn.Module):
             start_time = time.time()
             for seq, target, lens in tqdm(train_loader, desc='Training', unit='batch'):
                 self.optimizer.zero_grad()
-                seq = seq.to(self.device) # (B,max_len)
+                seq = seq.to(self.device) # (B, L)
                 target = target.to(self.device) # (B)
                 lens = lens.to(self.device) # (B)
 
@@ -212,6 +198,10 @@ class FMLP(nn.Module):
                 total_loss += loss.item()
                 sample_num += target.numel()
 
+                functional.reset_net(self)
+
+            self.scheduler.step()
+
             train_time = time.time() - start_time
             self.logger.info(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
 
@@ -224,7 +214,7 @@ class FMLP(nn.Module):
                     res_ndcg = res_kpis[10]['NDCG']
 
                 if self.best_kpi < res_mrr:
-                    self.best_state_dict = deepcopy(self.state_dict())
+                    self.best_state_dict = self.state_dict()
                     self.best_kpi = res_mrr
                 valid_time = time.time() - start_time
                 self.logger.info(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
@@ -249,6 +239,8 @@ class FMLP(nn.Module):
                 preds[topk] = torch.cat((preds[topk], rank_list[:, :topk].cpu()), 0)
         
             last_item = torch.cat((last_item, target), 0)
+
+            functional.reset_net(self)
 
         return preds, last_item
     
@@ -285,7 +277,9 @@ class FMLP(nn.Module):
                 res[topk]['MRR'] += res_mrr
                 res[topk]['NDCG'] += res_ndcg
                 res[topk]['HR'] += res_hr
+            functional.reset_net(self)
 
         for topk in k:
             res[topk] = {kpi: r / batch_cnt for kpi, r in res[topk].items()}
         return res
+        

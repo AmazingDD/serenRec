@@ -5,74 +5,81 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.init import xavier_normal_, constant_
 
-class STAMP(nn.Module):
+class NARM(nn.Module):
     def __init__(self, item_num, params):
-        super(STAMP, self).__init__()
+        super(NARM, self).__init__()
 
         self.logger = params['logger']
+
+        self.embedding_size = params['item_embedding_dim']
+        self.hidden_size = self.embedding_size # params['hidden_size']
+        self.n_layers = params['num_layers']
+        self.dropout_prob = params['dropout_prob']
 
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
         self.lr = params['learning_rate'] 
         self.wd = params['weight_decay'] 
 
-        self.embedding_size = params["item_embedding_dim"]
-
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
 
-        self.w1 = nn.Linear(self.embedding_size, self.embedding_size, bias=False)
-        self.w2 = nn.Linear(self.embedding_size, self.embedding_size, bias=False)
-        self.w3 = nn.Linear(self.embedding_size, self.embedding_size, bias=False)
-        self.w0 = nn.Linear(self.embedding_size, 1, bias=False)
-        self.b_a = nn.Parameter(torch.zeros(self.embedding_size), requires_grad=True)
-        self.mlp_a = nn.Linear(self.embedding_size, self.embedding_size, bias=True)
-        self.mlp_b = nn.Linear(self.embedding_size, self.embedding_size, bias=True)
-
-        self.sigmoid = nn.Sigmoid()
-        self.tanh = nn.Tanh()
+        self.emb_dropout = nn.Dropout(self.dropout_prob)
+        self.gru = nn.GRU(
+            self.embedding_size,
+            self.hidden_size,
+            self.n_layers,
+            bias=False,
+            batch_first=True,
+        )
+        self.a_1 = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.a_2 = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        
+        self.v_t = nn.Linear(self.hidden_size, 1, bias=False)
+        self.ct_dropout = nn.Dropout(self.dropout_prob)
+        self.b = nn.Linear(2 * self.hidden_size, self.embedding_size, bias=False)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Embedding):
+            xavier_normal_(module.weight.data)
+        elif isinstance(module, nn.Linear):
+            xavier_normal_(module.weight.data)
+            if module.bias is not None:
+                constant_(module.bias.data, 0)
 
     def gather_indexes(self, output, gather_index):
         gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1]) # (B)->(B, 1, D)
         output_tensor = output.gather(dim=1, index=gather_index)
         return output_tensor.squeeze(1)
-
-    def forward(self, item_seq, item_seq_len):
-        item_seq_emb = self.item_embedding(item_seq) 
-
-        last_inputs = self.gather_indexes(item_seq_emb, item_seq_len - 1) # (B, D)
-        org_memory = item_seq_emb # (B, L, D)
-
-        ms = torch.div(torch.sum(org_memory, dim=1), item_seq_len.unsqueeze(1).float()) # (B, D)
-
-        alpha = self.count_alpha(org_memory, last_inputs, ms)
-        vec = torch.matmul(alpha.unsqueeze(1), org_memory)
-        ma = vec.squeeze(1) + ms
-        hs = self.tanh(self.mlp_a(ma))
-        ht = self.tanh(self.mlp_b(last_inputs))
-        seq_output = hs * ht
-        return seq_output
     
-    def count_alpha(self, context, aspect, output):
-        ''' count the attention weights '''
-        timesteps = context.size(1) # L
-        aspect_3dim = aspect.repeat(1, timesteps).view(
-            -1, timesteps, self.embedding_size
-        ) # (B, D)->(B, L, D)
-        output_3dim = output.repeat(1, timesteps).view(
-            -1, timesteps, self.embedding_size
-        ) # (B, D)->(B, L, D)
-        
-        res_ctx = self.w1(context)
-        res_asp = self.w2(aspect_3dim)
-        res_output = self.w3(output_3dim)
-        res_sum = res_ctx + res_asp + res_output + self.b_a
-        res_act = self.w0(self.sigmoid(res_sum))
-        alpha = res_act.squeeze(2)
-        return alpha
+    def forward(self, item_seq, item_seq_len):
+        item_seq_emb = self.item_embedding(item_seq)
+        item_seq_emb_dropout = self.emb_dropout(item_seq_emb)
+
+        gru_out, _ = self.gru(item_seq_emb_dropout)
+
+        # fetch the last hidden state of last timestamp
+        c_global = ht = self.gather_indexes(gru_out, item_seq_len - 1)
+        # avoid the influence of padding
+        mask = item_seq.gt(0).unsqueeze(2).expand_as(gru_out)
+        q1 = self.a_1(gru_out)
+        q2 = self.a_2(ht)
+
+        q2_expand = q2.unsqueeze(1).expand_as(q1)
+        # calculate weighted factors α
+        alpha = self.v_t(mask * torch.sigmoid(q1 + q2_expand))
+        c_local = torch.sum(alpha.expand_as(gru_out) * gru_out, 1)
+
+        c_t = torch.cat([c_local, c_global], 1)
+        c_t = self.ct_dropout(c_t)
+
+        seq_output = self.b(c_t)
+
+        return seq_output
     
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
@@ -126,7 +133,7 @@ class STAMP(nn.Module):
         preds = {topk : torch.tensor([]) for topk in k}
         last_item = torch.tensor([])
 
-        for seq, target, lens in tqdm(test_loader, desc='Testing', unit='batch'):
+        for seq, target, lens in tqdm(test_loader, desc='Testing', unit='batch'): 
             seq = seq.to(self.device)
             lens = lens.to(self.device)
 
@@ -180,4 +187,3 @@ class STAMP(nn.Module):
         for topk in k:
             res[topk] = {kpi: r / batch_cnt for kpi, r in res[topk].items()}
         return res
-

@@ -1,6 +1,7 @@
 import time
 import math
 import copy
+from copy import deepcopy
 from tqdm import tqdm
 
 import torch
@@ -190,8 +191,16 @@ class TransformerLayer(nn.Module):
 
 class SASRec(nn.Module):
     def __init__(self, item_num, params):
+        # n_layers: 2                     # (int) The number of transformer layers in transformer encoder.
+        # n_heads: 2                      # (int) The number of attention heads for multi-head attention layer.
+        # hidden_size: 64                 # (int) The number of features in the hidden state.
+        # inner_size: 256                 # (int) The inner hidden size in feed-forward layer.
+        # hidden_dropout_prob: 0.5        # (float) The probability of an element to be zeroed.
+        # attn_dropout_prob: 0.5          # (float) The probability of an attention score to be zeroed.
+        # hidden_act: 'gelu'              # (str) The activation function in feed-forward layer.
+        # layer_norm_eps: 1e-12           # (float) A value added to the denominator for numerical stability. 
         super(SASRec, self).__init__()
-
+        self.logger = params['logger']
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
         self.lr = params['learning_rate'] 
@@ -270,7 +279,7 @@ class SASRec(nn.Module):
         self.to(self.device)
 
         self.best_state_dict = None
-        best_kpi = -1
+        self.best_kpi = -1
         for epoch in range(1, self.epochs + 1):
             self.train()
 
@@ -296,29 +305,21 @@ class SASRec(nn.Module):
                 sample_num += target.numel()
 
             train_time = time.time() - start_time
-            print(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
+            self.logger.info(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
 
             if valid_loader is not None:
                 start_time = time.time()
                 with torch.no_grad():
-                    preds, last_item = self.predict(valid_loader, [10])
-                    pred = preds[10]
-                    N, topk = pred.size()
-                    expand_target = last_item.unsqueeze(1).expand(-1, topk)
-                    hr = (pred == expand_target)
-                    ranks = (hr.nonzero(as_tuple=False)[:,-1] + 1).float()
-                    mrr = torch.reciprocal(ranks)
-                    ndcg = 1 / torch.log2(ranks + 1)
+                    res_kpis = self.evaluate(valid_loader, [10])
+                    res_mrr = res_kpis[10]['MRR']
+                    res_hr = res_kpis[10]['HR']
+                    res_ndcg = res_kpis[10]['NDCG']
 
-                    res_hr = hr.sum(axis=1).float().mean().item()
-                    res_mrr = torch.cat([mrr, torch.zeros(N - len(mrr))]).mean().item()
-                    res_ndcg = torch.cat([ndcg, torch.zeros(N - len(ndcg))]).mean().item()
-
-                if best_kpi < res_mrr:
-                    self.best_state_dict = self.state_dict()
-                    best_kpi = res_mrr
+                if self.best_kpi < res_mrr:
+                    self.best_state_dict = deepcopy(self.state_dict())
+                    self.best_kpi = res_mrr
                 valid_time = time.time() - start_time
-                print(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
+                self.logger.info(f'Valid Metrics: HR@10: {res_hr:.4f}\tMRR@10: {res_mrr:.4f}\tNDCG@10: {res_ndcg:.4f}\tValid Elapse: {valid_time:.2f}s')
 
     def predict(self, test_loader, k:list=[10]):
         self.eval()
@@ -326,7 +327,7 @@ class SASRec(nn.Module):
         preds = {topk : torch.tensor([]) for topk in k}
         last_item = torch.tensor([])
 
-        for seq, target, lens in test_loader:
+        for seq, target, lens in tqdm(test_loader, desc='Testing', unit='batch'):
             seq = seq.to(self.device)
             lens = lens.to(self.device)
 
@@ -342,3 +343,41 @@ class SASRec(nn.Module):
             last_item = torch.cat((last_item, target), 0)
 
         return preds, last_item
+    
+    def evaluate(self, test_loader, k:list=[10]):
+        self.eval()
+
+        res = {topk : {'MRR': 0., 'NDCG': 0., 'HR': 0.,} for topk in k}
+        batch_cnt = 0
+
+        for seq, target, lens in tqdm(test_loader, desc='Testing', unit='batch'): 
+            seq = seq.to(self.device)
+            lens = lens.to(self.device)
+            target = target.to(self.device)
+
+            seq_output = self.forward(seq, lens) 
+            test_items_emb = self.item_embedding.weight
+            scores = torch.matmul(seq_output, test_items_emb.transpose(0, 1)) # (B, D), (N, D)->(B, N)
+            rank_list = torch.argsort(scores[:, 1:], descending=True) + 1 
+
+            batch_cnt += 1
+            for topk in k:
+                pred = rank_list[:, :topk]
+                B, topk = pred.size()
+                expand_target = target.unsqueeze(1).expand(-1, topk)
+                hr = (pred == expand_target)
+                ranks = (hr.nonzero(as_tuple=False)[:, -1] + 1).float()
+                mrr = torch.reciprocal(ranks)
+                ndcg = 1 / torch.log2(ranks + 1)
+
+                res_hr = hr.sum(axis=1).float().mean().item()
+                res_mrr = torch.cat([mrr, torch.zeros(B - len(mrr), device=self.device)]).mean().item()
+                res_ndcg = torch.cat([ndcg, torch.zeros(B - len(ndcg), device=self.device)]).mean().item()
+
+                res[topk]['MRR'] += res_mrr
+                res[topk]['NDCG'] += res_ndcg
+                res[topk]['HR'] += res_hr
+
+        for topk in k:
+            res[topk] = {kpi: r / batch_cnt for kpi, r in res[topk].items()}
+        return res

@@ -5,9 +5,10 @@ use_gpu: True                   # (bool) Whether or not to use GPU.
 seed: 2024                      # (int) Random seed.
 state: INFO                     # (str) Logging level.
 reproducibility: True           # (bool) Whether or not to make results reproducible.
-data_path: dataset/           # (str) The path of input dataset.
-checkpoint_dir: saved         # (str) The path to save checkpoint file.
-save_dataset: True             # (bool) Whether or not to save filtered dataset.
+data_path: dataset/             # (str) The path of input dataset.
+log_path: logs/                 # (str) The path of logs.
+checkpoint_dir: saved           # (str) The path to save checkpoint file.
+save_dataset: True              # (bool) Whether or not to save filtered dataset.
 dataset_save_path: ~            # (str) The path of saved dataset.
 shuffle: True                   # (bool) Whether or not to shuffle the training data before each epoch.
 uid_name: user
@@ -28,4 +29,4 @@ test_ratio: 0.2
 split_method: fo
 metrics: ["MRR","NDCG","HR"]    # (list or str) Evaluation metrics.
 topk: [10]                      # (list or int or None) The value of k for topk evaluation metrics.
-valid_metric: MRR           # (str) metrics used for optuna target in test set evaluation
+valid_metric: MRR               # (str) metrics used for optuna target in test set evaluation

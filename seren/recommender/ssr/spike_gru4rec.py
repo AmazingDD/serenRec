@@ -1,4 +1,5 @@
 import time
+import math
 from copy import deepcopy
 from tqdm import tqdm
 
@@ -6,73 +7,105 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class STAMP(nn.Module):
+from spikingjelly.activation_based import neuron, surrogate, functional, layer
+
+class SGRU(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super(SGRU, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        self.reset_gate = nn.Linear(input_size + hidden_size, hidden_size, bias=False)
+        self.update_gate = nn.Linear(input_size + hidden_size, hidden_size, bias=False)
+        self.new_state = nn.Linear(input_size + hidden_size, hidden_size, bias=False)
+
+        self.spike1 = surrogate.Erf()
+        self.spike2 = surrogate.ATan()
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            weight.data.uniform_(-stdv, stdv)
+
+    def forward(self, x): 
+        B, L, D = x.shape
+        h = torch.zeros(B, D, device=x.device)
+        outputs = []
+        for i in range(x.size(1)):
+            input_step = x[:, i, :] # -> (B, D)
+            combined = torch.cat((input_step, h), dim=1) # -> (B, 2D)
+            rt = self.reset_gate(combined) # -> (B, D)
+            zt = self.update_gate(combined) # -> (B, D)
+
+            reset_gate = self.spike1(rt)
+            update_gate = self.spike1(zt)
+
+            # ->(B, 2D) -> (B, D)
+            nt = self.new_state(torch.cat((input_step, reset_gate * h), dim=1))
+            new_state_candidate = self.spike2(nt)
+
+            new_state = update_gate * h + (1 - update_gate) * new_state_candidate
+
+            outputs.append(new_state.unsqueeze(1))
+            h = new_state
+
+        output_tensor = torch.cat(outputs, dim=1)
+
+        return output_tensor, h
+
+
+class SpikeGRU4Rec(nn.Module):
     def __init__(self, item_num, params):
-        super(STAMP, self).__init__()
-
+        super(SpikeGRU4Rec, self).__init__()
         self.logger = params['logger']
-
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
         self.lr = params['learning_rate'] 
         self.wd = params['weight_decay'] 
-
-        self.embedding_size = params["item_embedding_dim"]
+        self.T = params['T']
+        self.max_seq_len = params['max_seq_len']
+        
+        self.embedding_size = params['item_embedding_dim']
+        self.hidden_size = params['item_embedding_dim'] # params['hidden_size']
+        self.num_layers = 1 # params['num_layers']
 
         self.n_items = item_num + 1
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
+        self.lif = neuron.LIFNode(tau=params['tau'], v_reset=None, surrogate_function=surrogate.ATan(), detach_reset=True)
+        self.dense = layer.Linear(self.embedding_size, self.embedding_size)
+        self.ln = nn.LayerNorm(self.embedding_size)
+        
+        self.gru_layers = SGRU(
+            input_size=self.embedding_size, 
+            hidden_size=self.hidden_size, 
+            num_layers=self.num_layers
+        )
 
-        self.w1 = nn.Linear(self.embedding_size, self.embedding_size, bias=False)
-        self.w2 = nn.Linear(self.embedding_size, self.embedding_size, bias=False)
-        self.w3 = nn.Linear(self.embedding_size, self.embedding_size, bias=False)
-        self.w0 = nn.Linear(self.embedding_size, 1, bias=False)
-        self.b_a = nn.Parameter(torch.zeros(self.embedding_size), requires_grad=True)
-        self.mlp_a = nn.Linear(self.embedding_size, self.embedding_size, bias=True)
-        self.mlp_b = nn.Linear(self.embedding_size, self.embedding_size, bias=True)
-
-        self.sigmoid = nn.Sigmoid()
-        self.tanh = nn.Tanh()
-
+        functional.set_step_mode(self, 'm')
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.epochs)
 
     def gather_indexes(self, output, gather_index):
-        gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1]) # (B)->(B, 1, D)
+        gather_index = gather_index.view(-1, 1, 1).expand(-1, -1, output.shape[-1])
         output_tensor = output.gather(dim=1, index=gather_index)
         return output_tensor.squeeze(1)
 
     def forward(self, item_seq, item_seq_len):
-        item_seq_emb = self.item_embedding(item_seq) 
-
-        last_inputs = self.gather_indexes(item_seq_emb, item_seq_len - 1) # (B, D)
-        org_memory = item_seq_emb # (B, L, D)
-
-        ms = torch.div(torch.sum(org_memory, dim=1), item_seq_len.unsqueeze(1).float()) # (B, D)
-
-        alpha = self.count_alpha(org_memory, last_inputs, ms)
-        vec = torch.matmul(alpha.unsqueeze(1), org_memory)
-        ma = vec.squeeze(1) + ms
-        hs = self.tanh(self.mlp_a(ma))
-        ht = self.tanh(self.mlp_b(last_inputs))
-        seq_output = hs * ht
-        return seq_output
-    
-    def count_alpha(self, context, aspect, output):
-        ''' count the attention weights '''
-        timesteps = context.size(1) # L
-        aspect_3dim = aspect.repeat(1, timesteps).view(
-            -1, timesteps, self.embedding_size
-        ) # (B, D)->(B, L, D)
-        output_3dim = output.repeat(1, timesteps).view(
-            -1, timesteps, self.embedding_size
-        ) # (B, D)->(B, L, D)
+        B, L = item_seq.shape
+        item_seq_emb = self.item_embedding(item_seq)  # (B, L, D)
+        item_seq_emb = item_seq_emb.unsqueeze(0).repeat(self.T, 1, 1, 1) # -> (T, B, L, D)
+        item_seq_emb = self.ln(item_seq_emb.flatten(0, 1)).reshape(self.T, B, L, -1).contiguous()
+        snn_output = self.lif(item_seq_emb).mean(0) # (T, B, L, D) -> (B, L, D)
         
-        res_ctx = self.w1(context)
-        res_asp = self.w2(aspect_3dim)
-        res_output = self.w3(output_3dim)
-        res_sum = res_ctx + res_asp + res_output + self.b_a
-        res_act = self.w0(self.sigmoid(res_sum))
-        alpha = res_act.squeeze(2)
-        return alpha
+        gru_output,  _ = self.gru_layers(snn_output)
+        
+        gru_output = self.dense(gru_output) # ->(B, L, D)
+
+        seq_output = self.gather_indexes(gru_output, item_seq_len - 1)
+
+        return seq_output # ->(B, D)
     
     def fit(self, train_loader, valid_loader=None):
         self.to(self.device)
@@ -102,6 +135,10 @@ class STAMP(nn.Module):
 
                 total_loss += loss.item()
                 sample_num += target.numel()
+
+                functional.reset_net(self)
+
+            self.scheduler.step()
 
             train_time = time.time() - start_time
             self.logger.info(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
@@ -141,6 +178,8 @@ class STAMP(nn.Module):
         
             last_item = torch.cat((last_item, target), 0)
 
+            functional.reset_net(self)
+
         return preds, last_item
     
     def evaluate(self, test_loader, k:list=[10]):
@@ -176,8 +215,9 @@ class STAMP(nn.Module):
                 res[topk]['MRR'] += res_mrr
                 res[topk]['NDCG'] += res_ndcg
                 res[topk]['HR'] += res_hr
+                
+            functional.reset_net(self)
 
         for topk in k:
             res[topk] = {kpi: r / batch_cnt for kpi, r in res[topk].items()}
         return res
-

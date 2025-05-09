@@ -6,20 +6,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Caser(nn.Module):
+from spikingjelly.activation_based import surrogate, neuron, functional, layer
+
+class Scaser(nn.Module):
     def __init__(self, item_num, params):
-        super(Caser, self).__init__()
+        super(Scaser, self).__init__()
         self.logger = params['logger']
         self.epochs = params['epochs']
         self.device = params['device'] if torch.cuda.is_available() else 'cpu'
         self.lr = params['learning_rate'] 
         self.wd = params['weight_decay'] 
         self.max_seq_length = params['max_seq_len']
+        self.T = params['T']
 
         self.embedding_size = params['item_embedding_dim']
         self.n_h = 8 # params["nh"] (int) The number of horizontal Convolutional filters.                   
         self.n_v = 4 # params["nv"] (int) The number of vertical Convolutional filters.
-        self.dropout_prob = params["dropout_prob"]
         self.reg_weight = params["reg_weight"]
 
         # for fair comparison, remove user embedding for session-recommendation
@@ -28,54 +30,63 @@ class Caser(nn.Module):
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_size, padding_idx=0)
 
         # vertical conv layer
-        self.conv_v = nn.Conv2d(
-            in_channels=1, out_channels=self.n_v, kernel_size=(self.max_seq_length, 1)
-        )
+        self.conv_v = layer.Conv2d(in_channels=1, out_channels=self.n_v, kernel_size=(self.max_seq_length, 1), bias=False)
 
+        self.rpe_ln = nn.LayerNorm(self.embedding_size)
+        self.rpe_lif = neuron.LIFNode(detach_reset=True, surrogate_function=surrogate.ATan())
+        
         # horizontal conv layer
         lengths = [i + 1 for i in range(self.max_seq_length)]
         self.conv_h = nn.ModuleList(
-            [nn.Conv2d(in_channels=1, out_channels=self.n_h, kernel_size=(i, self.embedding_size)) for i in lengths])
+            [layer.Conv2d(in_channels=1, out_channels=self.n_h, kernel_size=(i, self.embedding_size), bias=False) for i in lengths])
+        self.bn_conv = nn.ModuleList([layer.BatchNorm2d(self.n_h) for _ in lengths])
+        self.act_conv = nn.ModuleList([neuron.LIFNode(tau=params['tau'], detach_reset=True, surrogate_function=surrogate.ATan()) for _ in lengths])
         
         # fully-connected layer
         self.fc_dim_v = self.n_v * self.embedding_size
         self.fc_dim_h = self.n_h * len(lengths)
-        fc_dim_in = self.fc_dim_v + self.fc_dim_h
-        self.fc = nn.Linear(fc_dim_in, self.embedding_size)
+        self.fc_v = layer.Linear(self.fc_dim_v, self.embedding_size)
+        self.fc_h = layer.Linear(self.fc_dim_h, self.embedding_size)
 
-        self.dropout = nn.Dropout(self.dropout_prob)
-        self.act_conv = nn.ReLU()
-
+        functional.set_step_mode(self, 'm')
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
 
     def forward(self, item_seq):
-        item_seq_emb = self.item_embedding(item_seq).unsqueeze(1) # ->(B, 1, L, D)
-        # user_emb = self.user_embedding(user).squeeze(1) # (B, D)
+        B, _ = item_seq.shape
+        item_seq_emb = self.item_embedding(item_seq)
+        item_seq_emb = self.rpe_ln(item_seq_emb).unsqueeze(1)  # ->(B, 1, L, D)
+        item_seq_emb = item_seq_emb.unsqueeze(0).repeat(self.T, 1, 1, 1, 1) # ->(T, B, 1, L, D)
+        item_seq_emb = self.rpe_lif(item_seq_emb)  # ->(T, B, 1, L, D)
 
         # vertical conv Layers
-        out, out_h, out_v = None, None, None
+        out_h, out_v = None, None
         # vertical conv layer
         if self.n_v:
-            out_v = self.conv_v(item_seq_emb)
-            out_v = out_v.view(-1, self.fc_dim_v)  # prepare for fully connect
+            out_v = self.conv_v(item_seq_emb) # ->(T, B, 1, L, D)->(T, B, nv, D)
+            out_v = out_v.reshape(self.T, B, self.fc_dim_v) # -> (T, B, nv*D) 
 
         # horizontal conv layer
         out_hs = list()
         if self.n_h:
-            for conv in self.conv_h:
-                conv_out = conv(item_seq_emb).squeeze(3) # the last dimension is always 1
-                conv_out = self.act_conv(conv_out)
-                pool_out = F.max_pool1d(conv_out, conv_out.size(2)).squeeze(2) # after pool, the last dimension is 1,so squeeze
+            for i in range(self.max_seq_length):
+                conv = self.conv_h[i]
+                bn = self.bn_conv[i]
+                lif = self.act_conv[i]
+                conv_out = bn(conv(item_seq_emb)).squeeze(4) # -> (T, B, nh, L, 1) ->(T, B, nh, L) 
+                conv_out = lif(conv_out) # ->(T, B, nh, L) 
+                conv_out = conv_out.flatten(0, 1) # ->(TB, nh, L) 
+                pool_out = F.max_pool1d(conv_out, conv_out.size(2)).squeeze(2) # -> (TB, nh) 
+                pool_out = pool_out.reshape(self.T, B, -1) # -> (T, B, nh) 
                 out_hs.append(pool_out)
-            out_h = torch.cat(out_hs, 1)  # prepare for fully connect
-
-        out = torch.cat([out_v, out_h], 1)
-        out = self.dropout(out)
+            out_h = torch.cat(out_hs, 2)   # -> (T, B, seq_len*nh)  prepare for fully connect
 
         # fully-connected layer
-        seq_output = self.fc(out)
+        out_h = self.fc_h(out_h) # -> (T, B, D)
+        out_h = out_h.mean(0) # -> (B, D)
+        out_v = self.fc_v(out_v.mean(0)) 
+        seq_output = out_h + out_v # ->(B, D)
         
-        return seq_output
+        return seq_output # -> (B, D)
     
     def reg_loss_conv_h(self):
         """  L2 loss on conv_h """
@@ -107,7 +118,7 @@ class Caser(nn.Module):
                 logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))
                 loss = F.cross_entropy(logits, target)
 
-                reg_loss = self.item_embedding.weight.norm(2) + self.conv_v.weight.norm(2) + self.fc.weight.norm(2)
+                reg_loss = self.item_embedding.weight.norm(2) + self.conv_v.weight.norm(2) + self.fc_v.weight.norm(2) + self.fc_h.weight.norm(2)
                 loss = loss + self.reg_loss_conv_h() + self.reg_weight * reg_loss
 
                 loss.backward()
@@ -115,6 +126,8 @@ class Caser(nn.Module):
 
                 total_loss += loss.item()
                 sample_num += target.numel()
+
+                functional.reset_net(self)
 
             train_time = time.time() - start_time
             self.logger.info(f'Training epoch [{epoch}/{self.epochs}]\tTrain Loss: {total_loss:.4f}\tTrain Elapse: {train_time:.2f}s')
@@ -153,8 +166,10 @@ class Caser(nn.Module):
         
             last_item = torch.cat((last_item, target), 0)
 
+            functional.reset_net(self)
+
         return preds, last_item
-    
+
     def evaluate(self, test_loader, k:list=[10]):
         self.eval()
 
@@ -187,6 +202,7 @@ class Caser(nn.Module):
                 res[topk]['MRR'] += res_mrr
                 res[topk]['NDCG'] += res_ndcg
                 res[topk]['HR'] += res_hr
+            functional.reset_net(self)
 
         for topk in k:
             res[topk] = {kpi: r / batch_cnt for kpi, r in res[topk].items()}

@@ -1,5 +1,5 @@
 <p align="left">
-<img src="seren/logo.jpg" align="center" width="60%" style="margin: 0 auto">
+<img src="assets/logo.jpg" align="center" width="60%" style="margin: 0 auto">
 </p>
 
 ## Overview
@@ -73,11 +73,12 @@ python main.py -use_cuda -gpu_id=0 -dataset=ml-1m -model=gru4rec -tune -nt=20
 | **Model** | **Publication** |
 |-----------|-----------------|
 | POP | A revisit of the popularity baseline in recommender systems (SIGIR'2020) |
+| GRU4REC | Improved Recurrent Neural Networks for Session-based Recommendations (RecSys'2016) |
+| NARM | Neural Attentive Session-based Recommendation (CIKM 2017) | 
 | CASER | Personalized Top-N Sequential Recommendation via Convolutional Sequence Embedding (WSDM'2018) |
 | SASREC | Self-Attentive Sequential Recommendation (ICDM'2018) |
-| SRGNN | Session-based Recommendation with Graph Neural Networks (AAAI'2019) |
 | STAMP | STAMP: Short-Term Attention/Memory Priority Model for Session-based Recommendation (KDD'2018) |
-| GRU4REC | Improved Recurrent Neural Networks for Session-based Recommendations (RecSys'2016) |
+| SRGNN | Session-based Recommendation with Graph Neural Networks (AAAI'2019) |
 | FMLP | Filter-enhanced MLP is All You Need for Sequential Recommendation (WWW'2022) |
 | LRUREC | Linear Recurrent Units for Sequential Recommendation (WSDM'2024) |
 | BSAREC | An Attentive Inductive bias for Sequential Recommendation Beyond the Self-Attention (AAAI'2024) |

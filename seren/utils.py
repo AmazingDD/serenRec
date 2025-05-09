@@ -1,5 +1,6 @@
 import re
 import os
+import gzip
 import datetime
 import numpy as np
 import pandas as pd
@@ -16,6 +17,47 @@ def get_local_time():
     cur = cur.strftime('%b-%d-%Y_%H-%M-%S')
 
     return cur
+
+def check_data_dir(root_path, data_filename):
+    data_dir = root_path
+    ensure_dir(data_dir)
+    data_dir = os.path.join(data_dir, data_filename)
+    assert os.path.exists(data_dir), f'{data_filename} in {root_path} not exists'
+    return data_dir
+
+def parse(path):
+    g = gzip.open(path, 'rb')
+    for l in g:
+        yield eval(l)
+
+class Logger:
+    ''' spikingjelly induce logging not work '''
+    def __init__(self, config, desc=None):
+        log_root = config['log_path']
+        dir_name = os.path.dirname(log_root)
+        ensure_dir(dir_name)
+
+        out_dir = os.path.join(log_root, f'{config["dataset"]}_{config["prepro"]}_{config["model"]}_T{config["T"]}_len{config["max_seq_len"]}_b{config["batch_size"]}_{config["epochs"]}epochs')
+
+        ensure_dir(out_dir)
+
+        logfilename = f'{desc}_record.log' # _{get_local_time()}
+        logfilepath = os.path.join(out_dir, logfilename)
+
+        self.filename = logfilepath
+
+        f = open(logfilepath, 'w', encoding='utf-8')
+        f.write(str(config) + '\n')
+        f.flush()
+        f.close()
+
+
+    def info(self, s=None):
+        print(s)
+        f = open(self.filename, 'a', encoding='utf-8')
+        f.write(f'[{get_local_time()}] - {s}\n')
+        f.flush()
+        f.close()
 
 class Interactions(object):
     def __init__(self, config, encoding=True) -> None:
@@ -36,16 +78,79 @@ class Interactions(object):
 
     def _load_raw_data(self):
         data_dir = None
-        if self.dataset == 'ml-25m':
-            data_dir = f'./movielens/{self.dataset}/'
-            self.data_dir = os.path.join(data_dir, 'ratings.csv')
-            assert os.path.exists(self.data_dir), f'ratings.csv in {data_dir} not exists'
+        if self.dataset == 'ml-1m':
+            # this dataset is only for toy-implementation
+            self.data_dir = check_data_dir(f'./movielens/{self.dataset}/', 'ratings.dat')
+            self.data = pd.read_csv(
+                self.data_dir, 
+                delimiter='::', 
+                names=[self.uid_name, self.iid_name, self.inter_name, self.time_name], 
+                engine='python')
+            
+        elif self.dataset == 'ml-25m':
+            self.data_dir = check_data_dir(f'./movielens/{self.dataset}/', 'ratings.csv')
             self.data = pd.read_csv(self.data_dir)
-        elif self.dataset == 'ml-1m':
-            data_dir = f'./movielens/{self.dataset}/'
-            self.data_dir = os.path.join(data_dir, 'ratings.dat')
-            assert os.path.exists(self.data_dir), f'ratings.csv in {data_dir} not exists'
-            self.data = pd.read_csv(self.data_dir, delimiter='::', names=[self.uid_name, self.iid_name, self.inter_name, self.time_name], engine='python')
+            self.data.rename(
+                columns={
+                    'userId': self.uid_name, 
+                    'movieId': self.iid_name, 
+                    'rating': self.inter_name,
+                    'timestamp': self.time_name}, 
+                inplace=True)
+
+        elif self.dataset == 'music':
+            self.data_dir = check_data_dir(f'./amazon/', 'Digital_Music.csv')
+            self.data = pd.read_csv(self.data_dir, 
+                                    names=[self.iid_name, self.uid_name, self.inter_name, self.time_name])
+        elif self.dataset == 'video':
+            self.data_dir = check_data_dir(f'./amazon/', 'Video_Games.csv')
+            self.data = pd.read_csv(self.data_dir, 
+                                    names=[self.iid_name, self.uid_name, self.inter_name, self.time_name])
+            
+        elif self.dataset == 'arts':
+            self.data_dir = check_data_dir(f'./amazon/', 'Arts_Crafts_and_Sewing.csv')
+            self.data = pd.read_csv(self.data_dir, 
+                                    names=[self.iid_name, self.uid_name, self.inter_name, self.time_name])
+            
+        elif self.dataset == 'steam':
+            self.data_dir = check_data_dir(f'./steam/', 'steam_reviews.json.gz')
+
+            i = 0
+            df = {}
+            for d in parse(self.data_dir):
+                df[i] = d
+                i += 1
+            self.data = pd.DataFrame.from_dict(df, orient='index')
+            self.data = self.data[['user_id', 'product_id', 'hours', 'date']].copy()
+            self.data = self.data[~self.data['user_id'].isna()].reset_index(drop=True)
+            self.data.rename(
+                columns={
+                    'user_id': self.uid_name, 
+                    'product_id': self.iid_name, 
+                    'hours': self.inter_name, 
+                    'date': self.time_name}, 
+                inplace=True)
+            self.data[self.inter_name] = self.data[self.inter_name].fillna(0.)
+
+        elif self.dataset == 'retail':
+            self.data_dir = check_data_dir(f'./retail/', 'events.csv')
+
+            self.data = pd.read_csv(self.data_dir, header=0, usecols=[0, 1, 2, 3], dtype={0:np.int64, 1:np.int64, 2:str, 3:np.int64})
+            self.data.columns = [self.time_name, self.uid_name, 'event', self.iid_name]
+            self.data[self.time_name] = (self.data[self.time_name] / 1000).astype(int)
+            self.data[self.time_name] = pd.to_datetime(self.data[self.time_name], unit='s')
+            self.data = self.data.query('event == "view"').reset_index(drop=True)
+            del self.data['event']
+
+        elif self.dataset == 'yoochoose':
+            self.data_dir = check_data_dir(f'./yoochoose/', 'yoochoose-clicks.dat')
+            self.data = pd.read_csv(
+                self.data_dir,
+                sep=',', header=None, usecols=[0,1,2], dtype={0:np.int32, 1:str, 2:np.int64},
+                names=[self.uid_name, self.time_name, self.iid_name] #'SessionId', 'time', 'ItemId'
+            )
+            self.data[self.time_name] = pd.to_datetime(self.data[self.time_name], format='%Y-%m-%dT%H:%M:%S.%fZ')
+
         else:
             raise NameError(f'Invalid dataset name: {self.dataset}')
         
@@ -141,7 +246,7 @@ class Interactions(object):
                 index[key].append(i)
         return index.values()
 
-    def _build_dataset(self):
+    def _build_dataset(self, session=True):
         train_idx, test_idx = [], []
         if self.sm == 'ufo':
             print('fold-out by user')
@@ -159,8 +264,12 @@ class Interactions(object):
         else:
             raise ValueError(f'Invalid train test split method: {self.sm}')
 
-        self.train_data = [self.new_item_list[train_idx], self.target_list[train_idx], self.item_list_len[train_idx]]
-        self.test_data = [self.new_item_list[test_idx], self.target_list[test_idx], self.item_list_len[test_idx]]
+        if session:
+            self.train_data = [self.new_item_list[train_idx], self.target_list[train_idx], self.item_list_len[train_idx]]
+            self.test_data = [self.new_item_list[test_idx], self.target_list[test_idx], self.item_list_len[test_idx]]
+        else: 
+            self.train_data = [self.uid_list[train_idx], self.new_item_list[train_idx], self.target_list[train_idx], self.item_list_len[train_idx]]
+            self.test_data = [self.uid_list[test_idx], self.new_item_list[test_idx], self.target_list[test_idx], self.item_list_len[test_idx]]
 
     def build(self):
         self._load_raw_data()
@@ -177,8 +286,7 @@ class Interactions(object):
 
 
 def get_dataloader(ds, batch_size, shuffle, num_workers=4):  
-    return DataLoader(
-        ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 class SequentialDataset(Dataset):
     def __init__(self, data):
@@ -199,7 +307,7 @@ def accuracy_calculator(pred, last_item):
     expand_target = last_item.unsqueeze(1).expand(-1, topk)
 
     hr = (pred == expand_target)
-    ranks = (hr.nonzero(as_tuple=False)[:,-1] + 1).float() # 排序要从1开始，但是nonzero返回的索引从0开始
+    ranks = (hr.nonzero(as_tuple=False)[:,-1] + 1).float() # ranking from 1, but return index for nonzero start with 0
     mrr = torch.reciprocal(ranks) # 1/ranks
     ndcg = 1 / torch.log2(ranks + 1)
 
