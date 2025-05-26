@@ -9,8 +9,6 @@ from seren.utils import *
 from seren.space import define_space
 # load conventional models
 from seren.recommender import *
-# load SNN-based models
-from seren.recommender.ssr import SSR, SRSGNN, Scaser, SpikeGRU4Rec, SFSRec
 
 MODEL = {
     'pop': Pop,
@@ -23,12 +21,6 @@ MODEL = {
     'fmlp': FMLP,
     'lrurec': LRURec,
     'bsarec': BSARec,
-    # SNN
-    'scaser': Scaser,
-    'srsgnn': SRSGNN,
-    'sfsrec': SFSRec,
-    'sgru4rec': SpikeGRU4Rec,
-    'ssr': SSR,
 }
 
 config = yaml.safe_load(open('./seren/config/basic.yaml', 'r'))

@@ -5,7 +5,6 @@
 ## Overview
 
 - **serenRec** is a Python toolkit developed to benchmark sequential recommendation baselines and experiments. The name **SEREN** stands for **SE**quential **RE**commendatio**N**.
-- This repository also contains the related code for our article published in IJCAI'2025, "Cost-Effective On-Device Sequential Recommendation with Spiking Neural Networks", located in `seren.recommender.ssr`. The name **SSR** stands for **S**pike-wise **S**equential **R**ecommendation.
 
 <!-- <p align="center">
     <img width=70% src="./assets/ssr-overview.png" alt="Image 1" style="margin: 0 40px;">
