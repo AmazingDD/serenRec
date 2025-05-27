@@ -15,7 +15,6 @@
 ```
 optuna==3.5.0
 torch==2.0.1
-spikingjelly==0.0.0.0.14
 numpy==1.23.5
 pandas==1.5.3
 ```
